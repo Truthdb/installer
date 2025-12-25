@@ -27,6 +27,9 @@ jobs:
         with:
           components: rustfmt, clippy
       
+      - name: Add musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
