@@ -1,0 +1,7 @@
+[build]
+# Default to musl target for static linking
+target = "x86_64-unknown-linux-musl"
+
+[target.x86_64-unknown-linux-musl]
+# Ensure static linking
+rustflags = ["-C", "target-feature=+crt-static"]
