@@ -36,8 +36,18 @@ impl EvdevHandler {
                 if name.to_string_lossy().starts_with("event") {
                     if let Ok(device) = Device::open(&path) {
                         // Check if this device has keyboard capabilities
+                        // We check for multiple common keys across different layouts
                         if device.supported_keys().is_some_and(|keys| {
-                            keys.contains(Key::KEY_Q) && keys.contains(Key::KEY_A)
+                            // Check for alphanumeric keys that are common across layouts
+                            let has_letters = keys.contains(Key::KEY_Q)
+                                || keys.contains(Key::KEY_A)
+                                || keys.contains(Key::KEY_E);
+                            let has_numbers =
+                                keys.contains(Key::KEY_1) || keys.contains(Key::KEY_2);
+                            let has_enter = keys.contains(Key::KEY_ENTER);
+
+                            // A keyboard typically has letters, numbers, and enter
+                            has_letters && (has_numbers || has_enter)
                         }) {
                             info!("Found keyboard device: {:?}", path);
                             return Ok(device);
