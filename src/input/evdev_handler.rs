@@ -1,10 +1,10 @@
 //! Evdev-based keyboard input handler
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use evdev::{Device, InputEventKind, Key};
 use std::fs;
 use std::path::PathBuf;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
 use super::InputHandler;
 
@@ -17,22 +17,18 @@ pub struct EvdevHandler {
 impl EvdevHandler {
     /// Create a new evdev handler
     pub fn new() -> Result<Self> {
-        Ok(Self {
-            device: None,
-            fallback_mode: false,
-        })
+        Ok(Self { device: None, fallback_mode: false })
     }
 
     /// Find a keyboard device in /dev/input/event*
     fn find_keyboard() -> Result<Device> {
         let input_dir = PathBuf::from("/dev/input");
-        
+
         if !input_dir.exists() {
             return Err(anyhow!("/dev/input directory not found"));
         }
 
-        let entries = fs::read_dir(&input_dir)
-            .context("Failed to read /dev/input directory")?;
+        let entries = fs::read_dir(&input_dir).context("Failed to read /dev/input directory")?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -40,7 +36,7 @@ impl EvdevHandler {
                 if name.to_string_lossy().starts_with("event") {
                     if let Ok(device) = Device::open(&path) {
                         // Check if this device has keyboard capabilities
-                        if device.supported_keys().map_or(false, |keys| {
+                        if device.supported_keys().is_some_and(|keys| {
                             keys.contains(Key::KEY_Q) && keys.contains(Key::KEY_A)
                         }) {
                             info!("Found keyboard device: {:?}", path);
@@ -92,11 +88,11 @@ impl EvdevHandler {
     /// Check stdin for input in fallback mode
     fn poll_stdin() -> Result<Option<char>> {
         use std::io::Read;
-        
+
         // Set stdin to non-blocking mode
         let stdin = std::io::stdin();
         let mut buffer = [0u8; 1];
-        
+
         // Try to read one byte without blocking
         match stdin.lock().read(&mut buffer) {
             Ok(1) => {
@@ -123,7 +119,7 @@ impl InputHandler for EvdevHandler {
             Err(e) => {
                 warn!("Failed to initialize evdev: {}. Using stdin fallback.", e);
                 self.fallback_mode = true;
-                
+
                 // Set stdin to non-blocking mode in fallback
                 use nix::fcntl::{fcntl, FcntlArg, OFlag};
                 let stdin_fd = 0;
@@ -132,7 +128,7 @@ impl InputHandler for EvdevHandler {
                     flags.insert(OFlag::O_NONBLOCK);
                     let _ = fcntl(stdin_fd, FcntlArg::F_SETFL(flags));
                 }
-                
+
                 Ok(())
             }
         }
@@ -174,7 +170,7 @@ impl InputHandler for EvdevHandler {
                 let _ = fcntl(stdin_fd, FcntlArg::F_SETFL(flags));
             }
         }
-        
+
         info!("Evdev input handler cleaned up");
         Ok(())
     }

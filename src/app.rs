@@ -38,10 +38,7 @@ impl App {
     /// Create a new application instance
     pub fn new() -> Self {
         info!("Creating new application instance");
-        Self {
-            state: AppState::BootSplash,
-            should_exit: false,
-        }
+        Self { state: AppState::BootSplash, should_exit: false }
     }
 
     /// Get current state
@@ -67,7 +64,7 @@ impl App {
     /// Handle user input
     pub fn handle_input(&mut self, key: char) -> Result<()> {
         info!("Handling input: '{}'", key);
-        
+
         match self.state {
             AppState::Welcome => {
                 if key == 'q' || key == 'Q' {
@@ -85,18 +82,18 @@ impl App {
                 warn!("Input ignored in state: {}", self.state);
             }
         }
-        
+
         Ok(())
     }
 
     /// Transition to a new state
     fn transition_to(&mut self, new_state: AppState) -> Result<()> {
         info!("State transition: {} -> {}", self.state, new_state);
-        
+
         if new_state == AppState::Exit {
             self.should_exit = true;
         }
-        
+
         self.state = new_state;
         Ok(())
     }
@@ -110,10 +107,9 @@ impl App {
     /// Get display text for current state
     pub fn get_display_text(&self) -> Vec<String> {
         match &self.state {
-            AppState::BootSplash => vec![
-                "TruthDB Installer".to_string(),
-                "Initializing...".to_string(),
-            ],
+            AppState::BootSplash => {
+                vec!["TruthDB Installer".to_string(), "Initializing...".to_string()]
+            }
             AppState::Welcome => vec![
                 "TruthDB Installer".to_string(),
                 "Status: booted".to_string(),
@@ -124,10 +120,7 @@ impl App {
                 format!("ERROR: {}", msg),
                 "Press Q to quit".to_string(),
             ],
-            AppState::Exit => vec![
-                "TruthDB Installer".to_string(),
-                "Shutting down...".to_string(),
-            ],
+            AppState::Exit => vec!["TruthDB Installer".to_string(), "Shutting down...".to_string()],
         }
     }
 }

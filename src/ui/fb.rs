@@ -1,11 +1,11 @@
 //! Linux framebuffer UI backend
 
-use anyhow::{Context, Result, anyhow};
-use std::fs::{File, OpenOptions};
-use std::os::unix::io::AsRawFd;
-use std::io::Write;
+use anyhow::{anyhow, Context, Result};
 use nix::libc;
-use tracing::{info, debug, warn};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::os::unix::io::AsRawFd;
+use tracing::{debug, info, warn};
 
 use super::UiBackend;
 
@@ -117,18 +117,14 @@ impl FramebufferBackend {
 
         // Get variable screen info
         let mut vinfo: FbVarScreeninfo = unsafe { std::mem::zeroed() };
-        let ret = unsafe {
-            libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut vinfo as *mut _)
-        };
+        let ret = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut vinfo as *mut _) };
         if ret != 0 {
             return Err(anyhow!("FBIOGET_VSCREENINFO ioctl failed"));
         }
 
         // Get fixed screen info
         let mut finfo: FbFixScreeninfo = unsafe { std::mem::zeroed() };
-        let ret = unsafe {
-            libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut finfo as *mut _)
-        };
+        let ret = unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut finfo as *mut _) };
         if ret != 0 {
             return Err(anyhow!("FBIOGET_FSCREENINFO ioctl failed"));
         }
@@ -158,7 +154,7 @@ impl FramebufferBackend {
         }
 
         let offset = (y * self.line_length + x * (self.bits_per_pixel / 8)) as usize;
-        
+
         if offset + 3 < self.buffer.len() {
             match self.bits_per_pixel {
                 32 => {
@@ -176,9 +172,9 @@ impl FramebufferBackend {
                 }
                 16 => {
                     // RGB565 format
-                    let rgb565 = ((r as u16 & 0xF8) << 8) 
-                               | ((g as u16 & 0xFC) << 3) 
-                               | ((b as u16 & 0xF8) >> 3);
+                    let rgb565 = ((r as u16 & 0xF8) << 8)
+                        | ((g as u16 & 0xFC) << 3)
+                        | ((b as u16 & 0xF8) >> 3);
                     self.buffer[offset] = (rgb565 & 0xFF) as u8;
                     self.buffer[offset + 1] = ((rgb565 >> 8) & 0xFF) as u8;
                 }
@@ -195,8 +191,7 @@ impl FramebufferBackend {
         }
 
         let glyph = FONT_8X8[idx];
-        for row in 0..8 {
-            let byte = glyph[row];
+        for (row, &byte) in glyph.iter().enumerate() {
             for col in 0..8 {
                 if byte & (1 << (7 - col)) != 0 {
                     self.put_pixel(x + col, y + row as u32, r, g, b);
@@ -216,13 +211,13 @@ impl FramebufferBackend {
     fn fallback_render(&self, lines: &[String]) -> Result<()> {
         // Clear screen using ANSI escape codes
         print!("\x1B[2J\x1B[H");
-        
+
         println!("╔════════════════════════════════════════╗");
         for line in lines {
             println!("║ {:<38} ║", line);
         }
         println!("╚════════════════════════════════════════╝");
-        
+
         std::io::stdout().flush()?;
         Ok(())
     }
@@ -272,7 +267,7 @@ impl UiBackend for FramebufferBackend {
             let y = start_y + (i as u32 * line_height);
             self.draw_string(line, 50, y, 255, 255, 255); // White text
         }
-        
+
         Ok(())
     }
 
@@ -283,13 +278,13 @@ impl UiBackend for FramebufferBackend {
 
         if let Some(ref mut fb_file) = self.fb_file {
             use std::io::{Seek, SeekFrom};
-            
+
             fb_file.seek(SeekFrom::Start(0))?;
             fb_file.write_all(&self.buffer)?;
             fb_file.flush()?;
             debug!("Frame presented");
         }
-        
+
         Ok(())
     }
 
@@ -299,7 +294,7 @@ impl UiBackend for FramebufferBackend {
             print!("\x1B[2J\x1B[H");
             std::io::stdout().flush()?;
         }
-        
+
         info!("Framebuffer backend cleaned up");
         Ok(())
     }

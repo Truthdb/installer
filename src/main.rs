@@ -4,16 +4,15 @@
 //! Displays a simple framebuffer UI and handles keyboard input.
 
 mod app;
-mod ui;
 mod input;
 mod platform;
+mod ui;
 
 use anyhow::{Context, Result};
 use std::process;
 use std::thread;
 use std::time::Duration;
-use tracing::{info, error, debug};
-use tracing_subscriber;
+use tracing::{debug, error, info};
 
 use app::App;
 use ui::UiBackend;
@@ -21,7 +20,7 @@ use ui::UiBackend;
 /// Main entry point
 fn main() {
     // Initialize logging to stdout/stderr
-    tracing_subscriber::fmt()
+    tracing_subscriber::fmt::fmt()
         .with_target(false)
         .with_thread_ids(false)
         .with_level(true)
@@ -50,23 +49,18 @@ fn run() -> Result<()> {
 
     // Initialize UI backend
     info!("Initializing UI backend...");
-    let mut ui = ui::create_backend()
-        .context("Failed to create UI backend")?;
-    
-    ui.init()
-        .context("Failed to initialize UI backend")?;
+    let mut ui = ui::create_backend().context("Failed to create UI backend")?;
+
+    ui.init().context("Failed to initialize UI backend")?;
 
     // Initialize input handler
     info!("Initializing input handler...");
-    let mut input = input::create_handler()
-        .context("Failed to create input handler")?;
-    
-    input.init()
-        .context("Failed to initialize input handler")?;
+    let mut input = input::create_handler().context("Failed to create input handler")?;
+
+    input.init().context("Failed to initialize input handler")?;
 
     // Transition from BootSplash to Welcome
-    app.initialize()
-        .context("Failed to initialize application")?;
+    app.initialize().context("Failed to initialize application")?;
 
     // Render initial screen
     render_frame(&app, &mut *ui)?;
@@ -80,7 +74,7 @@ fn run() -> Result<()> {
             Ok(Some(ch)) => {
                 debug!("Received input: '{}'", ch);
                 app.handle_input(ch)?;
-                
+
                 // Re-render after input
                 render_frame(&app, &mut *ui)?;
             }
@@ -116,15 +110,15 @@ fn run() -> Result<()> {
 fn render_frame(app: &App, ui: &mut dyn UiBackend) -> Result<()> {
     // Clear screen to dark blue
     ui.clear(0, 0, 64)?;
-    
+
     // Get text to display
     let lines = app.get_display_text();
-    
+
     // Render text
     ui.render_text(&lines)?;
-    
+
     // Present the frame
     ui.present()?;
-    
+
     Ok(())
 }
