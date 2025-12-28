@@ -157,7 +157,9 @@ impl InputHandler for EvdevHandler {
                     for event in events {
                         if let EventSummary::Key(_, key, value) = event.destructure() {
                             // Only process key press (value == 1), not release (value == 0)
-                            if value == 1 && let Some(ch) = Self::key_to_char(key) {
+                            if value == 1
+                                && let Some(ch) = Self::key_to_char(key)
+                            {
                                 debug!("Key pressed: {:?} -> '{}'", key, ch);
                                 return Ok(Some(ch));
                             }
