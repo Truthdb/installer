@@ -1,6 +1,6 @@
 //! Evdev-based keyboard input handler
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use evdev::{Device, EventSummary, KeyCode};
 use std::fs;
 use std::path::PathBuf;
@@ -134,7 +134,7 @@ impl InputHandler for EvdevHandler {
                 self.fallback_mode = true;
 
                 // Set stdin to non-blocking mode in fallback
-                use nix::fcntl::{fcntl, FcntlArg, OFlag};
+                use nix::fcntl::{FcntlArg, OFlag, fcntl};
                 use std::os::fd::BorrowedFd;
 
                 let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
@@ -180,7 +180,7 @@ impl InputHandler for EvdevHandler {
     fn cleanup(&mut self) -> Result<()> {
         if self.fallback_mode {
             // Restore blocking mode to stdin
-            use nix::fcntl::{fcntl, FcntlArg, OFlag};
+            use nix::fcntl::{FcntlArg, OFlag, fcntl};
             use std::os::fd::BorrowedFd;
 
             let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };

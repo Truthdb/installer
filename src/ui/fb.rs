@@ -1,6 +1,6 @@
 //! Linux framebuffer UI backend
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use nix::libc;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
