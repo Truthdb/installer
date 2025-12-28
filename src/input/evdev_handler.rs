@@ -32,28 +32,25 @@ impl EvdevHandler {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name() {
-                if name.to_string_lossy().starts_with("event") {
-                    if let Ok(device) = Device::open(&path) {
-                        // Check if this device has keyboard capabilities
-                        // We check for multiple common keys across different layouts
-                        if device.supported_keys().is_some_and(|keys| {
-                            // Check for alphanumeric keys that are common across layouts
-                            let has_letters = keys.contains(KeyCode::KEY_Q)
-                                || keys.contains(KeyCode::KEY_A)
-                                || keys.contains(KeyCode::KEY_E);
-                            let has_numbers =
-                                keys.contains(KeyCode::KEY_1) || keys.contains(KeyCode::KEY_2);
-                            let has_enter = keys.contains(KeyCode::KEY_ENTER);
+            if let Some(name) = path.file_name()
+                && name.to_string_lossy().starts_with("event")
+                && let Ok(device) = Device::open(&path)
+                // Check if this device has keyboard capabilities
+                // We check for multiple common keys across different layouts
+                && device.supported_keys().is_some_and(|keys| {
+                    // Check for alphanumeric keys that are common across layouts
+                    let has_letters = keys.contains(KeyCode::KEY_Q)
+                        || keys.contains(KeyCode::KEY_A)
+                        || keys.contains(KeyCode::KEY_E);
+                    let has_numbers = keys.contains(KeyCode::KEY_1) || keys.contains(KeyCode::KEY_2);
+                    let has_enter = keys.contains(KeyCode::KEY_ENTER);
 
-                            // A keyboard typically has letters, numbers, and enter
-                            has_letters && (has_numbers || has_enter)
-                        }) {
-                            info!("Found keyboard device: {:?}", path);
-                            return Ok(device);
-                        }
-                    }
-                }
+                    // A keyboard typically has letters, numbers, and enter
+                    has_letters && (has_numbers || has_enter)
+                })
+            {
+                info!("Found keyboard device: {:?}", path);
+                return Ok(device);
             }
         }
 
@@ -160,11 +157,9 @@ impl InputHandler for EvdevHandler {
                     for event in events {
                         if let EventSummary::Key(_, key, value) = event.destructure() {
                             // Only process key press (value == 1), not release (value == 0)
-                            if value == 1 {
-                                if let Some(ch) = Self::key_to_char(key) {
-                                    debug!("Key pressed: {:?} -> '{}'", key, ch);
-                                    return Ok(Some(ch));
-                                }
+                            if value == 1 && let Some(ch) = Self::key_to_char(key) {
+                                debug!("Key pressed: {:?} -> '{}'", key, ch);
+                                return Ok(Some(ch));
                             }
                         }
                     }
