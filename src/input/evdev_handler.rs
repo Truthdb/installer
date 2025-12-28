@@ -1,7 +1,7 @@
 //! Evdev-based keyboard input handler
 
-use anyhow::{anyhow, Context, Result};
-use evdev::{Device, InputEventKind, Key};
+use anyhow::{Context, Result, anyhow};
+use evdev::{Device, EventSummary, KeyCode};
 use std::fs;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -32,28 +32,25 @@ impl EvdevHandler {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name() {
-                if name.to_string_lossy().starts_with("event") {
-                    if let Ok(device) = Device::open(&path) {
-                        // Check if this device has keyboard capabilities
-                        // We check for multiple common keys across different layouts
-                        if device.supported_keys().is_some_and(|keys| {
-                            // Check for alphanumeric keys that are common across layouts
-                            let has_letters = keys.contains(Key::KEY_Q)
-                                || keys.contains(Key::KEY_A)
-                                || keys.contains(Key::KEY_E);
-                            let has_numbers =
-                                keys.contains(Key::KEY_1) || keys.contains(Key::KEY_2);
-                            let has_enter = keys.contains(Key::KEY_ENTER);
+            if let Some(name) = path.file_name()
+                && name.to_string_lossy().starts_with("event")
+                && let Ok(device) = Device::open(&path)
+                // Check if this device has keyboard capabilities
+                // We check for multiple common keys across different layouts
+                && device.supported_keys().is_some_and(|keys| {
+                    // Check for alphanumeric keys that are common across layouts
+                    let has_letters = keys.contains(KeyCode::KEY_Q)
+                        || keys.contains(KeyCode::KEY_A)
+                        || keys.contains(KeyCode::KEY_E);
+                    let has_numbers = keys.contains(KeyCode::KEY_1) || keys.contains(KeyCode::KEY_2);
+                    let has_enter = keys.contains(KeyCode::KEY_ENTER);
 
-                            // A keyboard typically has letters, numbers, and enter
-                            has_letters && (has_numbers || has_enter)
-                        }) {
-                            info!("Found keyboard device: {:?}", path);
-                            return Ok(device);
-                        }
-                    }
-                }
+                    // A keyboard typically has letters, numbers, and enter
+                    has_letters && (has_numbers || has_enter)
+                })
+            {
+                info!("Found keyboard device: {:?}", path);
+                return Ok(device);
             }
         }
 
@@ -61,36 +58,36 @@ impl EvdevHandler {
     }
 
     /// Map evdev key to character (simplified)
-    fn key_to_char(key: Key) -> Option<char> {
+    fn key_to_char(key: KeyCode) -> Option<char> {
         match key {
-            Key::KEY_Q => Some('q'),
-            Key::KEY_W => Some('w'),
-            Key::KEY_E => Some('e'),
-            Key::KEY_R => Some('r'),
-            Key::KEY_T => Some('t'),
-            Key::KEY_Y => Some('y'),
-            Key::KEY_U => Some('u'),
-            Key::KEY_I => Some('i'),
-            Key::KEY_O => Some('o'),
-            Key::KEY_P => Some('p'),
-            Key::KEY_A => Some('a'),
-            Key::KEY_S => Some('s'),
-            Key::KEY_D => Some('d'),
-            Key::KEY_F => Some('f'),
-            Key::KEY_G => Some('g'),
-            Key::KEY_H => Some('h'),
-            Key::KEY_J => Some('j'),
-            Key::KEY_K => Some('k'),
-            Key::KEY_L => Some('l'),
-            Key::KEY_Z => Some('z'),
-            Key::KEY_X => Some('x'),
-            Key::KEY_C => Some('c'),
-            Key::KEY_V => Some('v'),
-            Key::KEY_B => Some('b'),
-            Key::KEY_N => Some('n'),
-            Key::KEY_M => Some('m'),
-            Key::KEY_SPACE => Some(' '),
-            Key::KEY_ENTER => Some('\n'),
+            KeyCode::KEY_Q => Some('q'),
+            KeyCode::KEY_W => Some('w'),
+            KeyCode::KEY_E => Some('e'),
+            KeyCode::KEY_R => Some('r'),
+            KeyCode::KEY_T => Some('t'),
+            KeyCode::KEY_Y => Some('y'),
+            KeyCode::KEY_U => Some('u'),
+            KeyCode::KEY_I => Some('i'),
+            KeyCode::KEY_O => Some('o'),
+            KeyCode::KEY_P => Some('p'),
+            KeyCode::KEY_A => Some('a'),
+            KeyCode::KEY_S => Some('s'),
+            KeyCode::KEY_D => Some('d'),
+            KeyCode::KEY_F => Some('f'),
+            KeyCode::KEY_G => Some('g'),
+            KeyCode::KEY_H => Some('h'),
+            KeyCode::KEY_J => Some('j'),
+            KeyCode::KEY_K => Some('k'),
+            KeyCode::KEY_L => Some('l'),
+            KeyCode::KEY_Z => Some('z'),
+            KeyCode::KEY_X => Some('x'),
+            KeyCode::KEY_C => Some('c'),
+            KeyCode::KEY_V => Some('v'),
+            KeyCode::KEY_B => Some('b'),
+            KeyCode::KEY_N => Some('n'),
+            KeyCode::KEY_M => Some('m'),
+            KeyCode::KEY_SPACE => Some(' '),
+            KeyCode::KEY_ENTER => Some('\n'),
             _ => None,
         }
     }
@@ -121,6 +118,9 @@ impl InputHandler for EvdevHandler {
     fn init(&mut self) -> Result<()> {
         match Self::find_keyboard() {
             Ok(device) => {
+                device
+                    .set_nonblocking(true)
+                    .context("Failed to set input device to non-blocking")?;
                 info!("Evdev input handler initialized successfully");
                 self.device = Some(device);
                 self.fallback_mode = false;
@@ -131,8 +131,10 @@ impl InputHandler for EvdevHandler {
                 self.fallback_mode = true;
 
                 // Set stdin to non-blocking mode in fallback
-                use nix::fcntl::{fcntl, FcntlArg, OFlag};
-                let stdin_fd = 0;
+                use nix::fcntl::{FcntlArg, OFlag, fcntl};
+                use std::os::fd::BorrowedFd;
+
+                let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
                 if let Ok(flags) = fcntl(stdin_fd, FcntlArg::F_GETFL) {
                     let mut flags = OFlag::from_bits_truncate(flags);
                     flags.insert(OFlag::O_NONBLOCK);
@@ -150,19 +152,22 @@ impl InputHandler for EvdevHandler {
         }
 
         if let Some(ref mut device) = self.device {
-            // Fetch events (non-blocking)
-            while let Ok(events) = device.fetch_events() {
-                for event in events {
-                    if let InputEventKind::Key(key) = event.kind() {
-                        // Only process key press (value == 1), not release (value == 0)
-                        if event.value() == 1 {
-                            if let Some(ch) = Self::key_to_char(key) {
+            match device.fetch_events() {
+                Ok(events) => {
+                    for event in events {
+                        if let EventSummary::Key(_, key, value) = event.destructure() {
+                            // Only process key press (value == 1), not release (value == 0)
+                            if value == 1
+                                && let Some(ch) = Self::key_to_char(key)
+                            {
                                 debug!("Key pressed: {:?} -> '{}'", key, ch);
                                 return Ok(Some(ch));
                             }
                         }
                     }
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.into()),
             }
         }
 
@@ -172,8 +177,10 @@ impl InputHandler for EvdevHandler {
     fn cleanup(&mut self) -> Result<()> {
         if self.fallback_mode {
             // Restore blocking mode to stdin
-            use nix::fcntl::{fcntl, FcntlArg, OFlag};
-            let stdin_fd = 0;
+            use nix::fcntl::{FcntlArg, OFlag, fcntl};
+            use std::os::fd::BorrowedFd;
+
+            let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
             if let Ok(flags) = fcntl(stdin_fd, FcntlArg::F_GETFL) {
                 let mut flags = OFlag::from_bits_truncate(flags);
                 flags.remove(OFlag::O_NONBLOCK);
