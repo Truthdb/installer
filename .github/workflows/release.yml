@@ -74,16 +74,15 @@ jobs:
     name: Build
     needs: create-release
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.92-bookworm
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      
       - name: Install musl tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+          apt-get update
+          apt-get install -y musl-tools
       
       - name: Add musl target
         run: rustup target add x86_64-unknown-linux-musl
