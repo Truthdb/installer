@@ -25,6 +25,7 @@ fn main() {
         .with_thread_ids(false)
         .with_level(true)
         .init();
+    
 
     info!("TruthDB Installer starting...");
 
