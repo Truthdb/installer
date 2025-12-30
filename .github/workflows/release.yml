@@ -9,129 +9,18 @@ permissions:
   contents: write
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Get version from tag
-        id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-      
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --abbrev=0 --tags $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
-          
-          # Generate changelog
-          if [ -z "$PREV_TAG" ]; then
-            echo "First release"
-            CHANGELOG="Initial release of TruthDB Installer"
-          else
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges)
-          fi
-          
-          # Create release body
-          cat > release_notes.md << EOF
-          ## TruthDB Installer ${GITHUB_REF#refs/tags/v}
-          
-          ### Changes
-          $CHANGELOG
-          
-          ### Installation
-          
-          Download the \`truthdb-installer\` binary for your platform and verify the checksum.
-          
-          ### Usage
-          
-          This installer is designed to run in an initramfs environment. See README.md for details.
-          EOF
-          
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          cat release_notes.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-      
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.get_version.outputs.version }}
-          body: ${{ steps.release_notes.outputs.notes }}
-          draft: false
-          prerelease: false
+  release:
+    uses: Truthdb/.github/.github/workflows/rust-release.yml@issue-17-workflows
+    with:
+      binary_name: truthdb-installer
+      install_packages: musl-tools
+      cargo_target: x86_64-unknown-linux-musl
+      artifact_target_name: x86_64-linux-musl
+      extra_body: |
+        ### Installation
 
-  build:
-    name: Build
-    needs: create-release
-    runs-on: ubuntu-latest
-    container:
-      image: rust:1.92-bookworm
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install musl tools
-        run: |
-          apt-get update
-          apt-get install -y musl-tools
-      
-      - name: Add musl target
-        run: rustup target add x86_64-unknown-linux-musl
-      
-      - name: Build release
-        run: cargo build --release --target x86_64-unknown-linux-musl
-      
-      - name: Package binary
-        run: |
-          cd target/x86_64-unknown-linux-musl/release
-          tar czf truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.tar.gz truthdb-installer
-          sha256sum truthdb-installer > truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.sha256
+        Download the `truthdb-installer` binary for your platform and verify the checksum.
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-assets
-          path: |
-            target/x86_64-unknown-linux-musl/release/truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.tar.gz
-            target/x86_64-unknown-linux-musl/release/truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.sha256
-          if-no-files-found: error
+        ### Usage
 
-  upload:
-    name: Upload
-    needs: [create-release, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-assets
-          path: dist
-      
-      - name: Upload Release Asset - Binary Archive
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.tar.gz
-          asset_name: truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.tar.gz
-          asset_content_type: application/gzip
-      
-      - name: Upload Release Asset - Checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.sha256
-          asset_name: truthdb-installer-v${{ needs.create-release.outputs.version }}-x86_64-linux-musl.sha256
-          asset_content_type: text/plain
+        This installer is designed to run in an initramfs environment. See README.md for details.
