@@ -86,6 +86,7 @@ pub struct FramebufferBackend {
     width: u32,
     height: u32,
     bits_per_pixel: u32,
+    bytes_per_pixel: u32,
     line_length: u32,
     buffer: Vec<u8>,
     fallback_mode: bool,
@@ -99,6 +100,7 @@ impl FramebufferBackend {
             width: 0,
             height: 0,
             bits_per_pixel: 0,
+            bytes_per_pixel: 0,
             line_length: 0,
             buffer: Vec::new(),
             fallback_mode: false,
@@ -132,11 +134,26 @@ impl FramebufferBackend {
         self.width = vinfo.xres;
         self.height = vinfo.yres;
         self.bits_per_pixel = vinfo.bits_per_pixel;
+        // Some framebuffers report 15bpp (RGB555) or 30bpp; bytes per pixel must be ceil(bpp/8).
+        self.bytes_per_pixel = self.bits_per_pixel.div_ceil(8);
         self.line_length = finfo.line_length;
 
         info!(
             "Framebuffer initialized: {}x{} @ {} bpp, line_length={}",
             self.width, self.height, self.bits_per_pixel, self.line_length
+        );
+
+        debug!(
+            "Framebuffer format: bytes_per_pixel={}, red(off={},len={}), green(off={},len={}), blue(off={},len={}), transp(off={},len={})",
+            self.bytes_per_pixel,
+            vinfo.red.offset,
+            vinfo.red.length,
+            vinfo.green.offset,
+            vinfo.green.length,
+            vinfo.blue.offset,
+            vinfo.blue.length,
+            vinfo.transp.offset,
+            vinfo.transp.length
         );
 
         // Allocate buffer
@@ -153,32 +170,46 @@ impl FramebufferBackend {
             return;
         }
 
-        let offset = (y * self.line_length + x * (self.bits_per_pixel / 8)) as usize;
+        let offset = (y * self.line_length + x * self.bytes_per_pixel) as usize;
+        let bytes = self.bytes_per_pixel as usize;
 
-        if offset + 3 < self.buffer.len() {
-            match self.bits_per_pixel {
-                32 => {
-                    // BGRA or RGBA format
-                    self.buffer[offset] = b;
-                    self.buffer[offset + 1] = g;
-                    self.buffer[offset + 2] = r;
-                    self.buffer[offset + 3] = 255; // Alpha
+        if offset + bytes > self.buffer.len() {
+            return;
+        }
+
+        match self.bits_per_pixel {
+            32 | 30 => {
+                // Common little-endian packed formats (e.g. XRGB8888/ARGB8888).
+                // Many Linux fbdev drivers expose these in memory as B,G,R,(X/A).
+                self.buffer[offset] = b;
+                self.buffer[offset + 1] = g;
+                self.buffer[offset + 2] = r;
+                if bytes >= 4 {
+                    self.buffer[offset + 3] = 255; // Alpha / unused
                 }
-                24 => {
-                    // BGR or RGB format
-                    self.buffer[offset] = b;
-                    self.buffer[offset + 1] = g;
-                    self.buffer[offset + 2] = r;
-                }
-                16 => {
-                    // RGB565 format
-                    let rgb565 = ((r as u16 & 0xF8) << 8)
-                        | ((g as u16 & 0xFC) << 3)
-                        | ((b as u16 & 0xF8) >> 3);
-                    self.buffer[offset] = (rgb565 & 0xFF) as u8;
-                    self.buffer[offset + 1] = ((rgb565 >> 8) & 0xFF) as u8;
-                }
-                _ => {}
+            }
+            24 => {
+                // Packed 24bpp.
+                self.buffer[offset] = b;
+                self.buffer[offset + 1] = g;
+                self.buffer[offset + 2] = r;
+            }
+            16 => {
+                // RGB565 format
+                let rgb565 =
+                    ((r as u16 & 0xF8) << 8) | ((g as u16 & 0xFC) << 3) | ((b as u16 & 0xF8) >> 3);
+                self.buffer[offset] = (rgb565 & 0xFF) as u8;
+                self.buffer[offset + 1] = ((rgb565 >> 8) & 0xFF) as u8;
+            }
+            15 => {
+                // RGB555 format (0rrrrrgggggbbbbb)
+                let rgb555 =
+                    (((r as u16) >> 3) << 10) | (((g as u16) >> 3) << 5) | ((b as u16) >> 3);
+                self.buffer[offset] = (rgb555 & 0xFF) as u8;
+                self.buffer[offset + 1] = ((rgb555 >> 8) & 0xFF) as u8;
+            }
+            _ => {
+                // Unsupported format; leave pixel unchanged.
             }
         }
     }
