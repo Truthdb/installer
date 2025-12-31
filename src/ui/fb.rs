@@ -224,7 +224,8 @@ impl FramebufferBackend {
         let glyph = FONT_8X8[idx];
         for (row, &byte) in glyph.iter().enumerate() {
             for col in 0..8 {
-                if byte & (1 << (7 - col)) != 0 {
+                // Font bitmap bytes are LSB-first; using MSB-first mirrors glyphs horizontally.
+                if byte & (1 << col) != 0 {
                     self.put_pixel(x + col, y + row as u32, r, g, b);
                 }
             }
