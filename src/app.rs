@@ -183,7 +183,7 @@ mod tests {
     fn test_display_text() {
         let app = App::new();
         let text = app.get_display_text();
-        assert!(text.len() >= 1);
+        assert!(!text.is_empty());
         assert!(text[0].contains("TruthDB"));
     }
 }
