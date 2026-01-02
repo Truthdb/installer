@@ -1,6 +1,7 @@
 //! Main application state machine
 
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::fmt;
 use tracing::{info, warn};
 
@@ -32,13 +33,23 @@ impl fmt::Display for AppState {
 pub struct App {
     state: AppState,
     should_exit: bool,
+    log_lines: VecDeque<String>,
+    max_log_lines: usize,
 }
 
 impl App {
     /// Create a new application instance
     pub fn new() -> Self {
         info!("Creating new application instance");
-        Self { state: AppState::BootSplash, should_exit: false }
+        let mut app = Self {
+            state: AppState::BootSplash,
+            should_exit: false,
+            log_lines: VecDeque::new(),
+            // Conservative default; UI will clip if the screen is smaller.
+            max_log_lines: 80,
+        };
+        app.log_step("TruthDB Installer booting");
+        app
     }
 
     /// Get current state
@@ -59,6 +70,15 @@ impl App {
             self.transition_to(AppState::Welcome)?;
         }
         Ok(())
+    }
+
+    /// Append a single log line to the UI (one line per step).
+    pub fn log_step(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        self.log_lines.push_back(line);
+        while self.log_lines.len() > self.max_log_lines {
+            self.log_lines.pop_front();
+        }
     }
 
     /// Handle user input
@@ -101,27 +121,28 @@ impl App {
     /// Handle error condition
     pub fn handle_error(&mut self, error: String) {
         warn!("Application error: {}", error);
+        self.log_step(format!("[ERR] {}", error));
         self.state = AppState::Error(error);
     }
 
     /// Get display text for current state
     pub fn get_display_text(&self) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+
+        // Always render the step log top-left.
+        lines.extend(self.log_lines.iter().cloned());
+
+        // Keep minimal state hints without taking over the screen.
         match &self.state {
-            AppState::BootSplash => {
-                vec!["TruthDB Installer".to_string(), "Initializing...".to_string()]
+            AppState::BootSplash => {}
+            AppState::Welcome => {}
+            AppState::Error(_) => {}
+            AppState::Exit => {
+                lines.push("[OK] Exiting".to_string());
             }
-            AppState::Welcome => vec![
-                "TruthDB Installer".to_string(),
-                "Status: booted".to_string(),
-                "Press Q to quit (for now)".to_string(),
-            ],
-            AppState::Error(msg) => vec![
-                "TruthDB Installer".to_string(),
-                format!("ERROR: {}", msg),
-                "Press Q to quit".to_string(),
-            ],
-            AppState::Exit => vec!["TruthDB Installer".to_string(), "Shutting down...".to_string()],
         }
+
+        lines
     }
 }
 

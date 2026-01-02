@@ -244,11 +244,9 @@ impl FramebufferBackend {
         // Clear screen using ANSI escape codes
         print!("\x1B[2J\x1B[H");
 
-        println!("╔════════════════════════════════════════╗");
         for line in lines {
-            println!("║ {:<38} ║", line);
+            println!("{}", line);
         }
-        println!("╚════════════════════════════════════════╝");
 
         std::io::stdout().flush()?;
         Ok(())
@@ -292,12 +290,16 @@ impl UiBackend for FramebufferBackend {
         }
 
         debug!("Rendering {} lines of text", lines.len());
-        let start_y = 100; // Start 100 pixels from top
-        let line_height = 20;
+
+        // Render from top-left, one line per row.
+        // Font is 8px tall; use 10px line height for readability.
+        let start_x = 0;
+        let start_y = 0;
+        let line_height = 10;
 
         for (i, line) in lines.iter().enumerate() {
             let y = start_y + (i as u32 * line_height);
-            self.draw_string(line, 50, y, 255, 255, 255); // White text
+            self.draw_string(line, start_x, y, 255, 255, 255); // White text
         }
 
         Ok(())

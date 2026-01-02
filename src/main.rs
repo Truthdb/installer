@@ -49,15 +49,21 @@ fn run() -> Result<()> {
 
     // Initialize UI backend
     info!("Initializing UI backend...");
+    app.log_step("[..] Initializing UI");
     let mut ui = ui::create_backend().context("Failed to create UI backend")?;
 
     ui.init().context("Failed to initialize UI backend")?;
+    app.log_step("[OK] UI initialized");
+    render_frame(&app, &mut *ui)?;
 
     // Initialize input handler
     info!("Initializing input handler...");
+    app.log_step("[..] Initializing input");
     let mut input = input::create_handler().context("Failed to create input handler")?;
 
     input.init().context("Failed to initialize input handler")?;
+    app.log_step("[OK] Input initialized (press Q to quit for now)");
+    render_frame(&app, &mut *ui)?;
 
     // Transition from BootSplash to Welcome
     app.initialize().context("Failed to initialize application")?;
@@ -74,6 +80,10 @@ fn run() -> Result<()> {
             Ok(Some(ch)) => {
                 debug!("Received input: '{}'", ch);
                 app.handle_input(ch)?;
+
+                if ch == 'q' || ch == 'Q' {
+                    app.log_step("[..] Exit requested");
+                }
 
                 // Re-render after input
                 render_frame(&app, &mut *ui)?;
