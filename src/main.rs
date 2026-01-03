@@ -9,6 +9,7 @@ mod platform;
 mod ui;
 
 use anyhow::{Context, Result};
+use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::Duration;
@@ -88,6 +89,20 @@ fn run() -> Result<()> {
     };
 
     if let Some(disk) = target_disk {
+        let payload_path = Path::new("/payload/debian-minbase-amd64-bookworm.tar.zst");
+        app.log_step("[..] Checking Debian rootfs payload");
+        render_frame(&app, &mut *ui)?;
+        if !payload_path.exists() {
+            app.handle_error(format!(
+                "Missing rootfs payload: {}",
+                payload_path.display()
+            ));
+            // Do not perform destructive disk operations without a payload to install.
+            render_frame(&app, &mut *ui)?;
+            return Ok(());
+        }
+        app.log_step("[OK] Rootfs payload present");
+
         app.log_step("[..] Wiping disk signatures (wipefs)");
         render_frame(&app, &mut *ui)?;
         if let Err(e) = platform::partition::wipefs_all(&disk.dev_path) {
