@@ -71,16 +71,46 @@ fn run() -> Result<()> {
     // MVP milestone: enumerate disks and enforce "abort if multiple eligible disks".
     app.log_step("[..] Enumerating eligible disks");
     render_frame(&app, &mut *ui)?;
-    match platform::disks::DiskScanner::new_default().choose_single_target_disk() {
+    let target_disk = match platform::disks::DiskScanner::new_default().choose_single_target_disk()
+    {
         Ok(disk) => {
             app.log_step(format!(
                 "[OK] Target disk: {} ({} bytes)",
                 disk.dev_path.display(),
                 disk.size_bytes
             ));
+            Some(disk)
         }
         Err(e) => {
             app.handle_error(format!("Disk selection failed: {e:#}"));
+            None
+        }
+    };
+
+    if let Some(disk) = target_disk {
+        app.log_step("[..] Wiping disk signatures (wipefs)");
+        render_frame(&app, &mut *ui)?;
+        if let Err(e) = platform::partition::wipefs_all(&disk.dev_path) {
+            app.handle_error(format!("wipefs failed: {e:#}"));
+        } else {
+            app.log_step("[OK] Signatures wiped");
+        }
+
+        app.log_step("[..] Partitioning disk (GPT: ESP+root)");
+        render_frame(&app, &mut *ui)?;
+        if let Err(e) = platform::partition::partition_gpt_esp_root(
+            &disk.dev_path,
+            platform::partition::PartitionPlan::default(),
+        ) {
+            app.handle_error(format!("Partitioning failed: {e:#}"));
+        } else {
+            app.log_step("[OK] Disk partitioned");
+            if let Ok((esp, root)) =
+                platform::partition::expected_esp_and_root_partitions(&disk.dev_path)
+            {
+                app.log_step(format!("[OK] ESP partition: {}", esp.display()));
+                app.log_step(format!("[OK] Root partition: {}", root.display()));
+            }
         }
     }
 
