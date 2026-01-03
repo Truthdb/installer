@@ -10,8 +10,8 @@ use tracing::{debug, info, warn};
 use super::UiBackend;
 
 const FB_DEVICE: &str = "/dev/fb0";
-const FBIOGET_VSCREENINFO: libc::c_int = 0x4600;
-const FBIOGET_FSCREENINFO: libc::c_int = 0x4602;
+const FBIOGET_VSCREENINFO: libc::Ioctl = 0x4600 as libc::Ioctl;
+const FBIOGET_FSCREENINFO: libc::Ioctl = 0x4602 as libc::Ioctl;
 
 /// Linux framebuffer fixed screen info
 #[repr(C)]

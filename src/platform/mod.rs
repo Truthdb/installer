@@ -3,6 +3,8 @@
 //! Handles system operations like reboot, poweroff, etc.
 //! Currently placeholder for future implementation
 
+pub mod disks;
+
 use anyhow::Result;
 use tracing::info;
 
