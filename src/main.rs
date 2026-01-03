@@ -93,10 +93,7 @@ fn run() -> Result<()> {
         app.log_step("[..] Checking Debian rootfs payload");
         render_frame(&app, &mut *ui)?;
         if !payload_path.exists() {
-            app.handle_error(format!(
-                "Missing rootfs payload: {}",
-                payload_path.display()
-            ));
+            app.handle_error(format!("Missing rootfs payload: {}", payload_path.display()));
             // Do not perform destructive disk operations without a payload to install.
             render_frame(&app, &mut *ui)?;
             return Ok(());
