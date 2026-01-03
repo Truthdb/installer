@@ -134,6 +134,17 @@ cargo test --target x86_64-unknown-linux-musl
 cargo test --target x86_64-unknown-linux-musl test_name
 ```
 
+### Testing in Docker (recommended)
+If you don't have a Linux + musl toolchain locally, you can run the same tests CI runs using Docker:
+
+```bash
+./scripts/test_docker.sh
+```
+
+This runs:
+- `cargo test --target x86_64-unknown-linux-gnu`
+- `cargo test --target x86_64-unknown-linux-musl` (after installing `musl-tools` and `rust-std`)
+
 ### Code Structure Guidelines
 
 - Keep modules focused and testable

@@ -68,6 +68,22 @@ fn run() -> Result<()> {
     // Transition from BootSplash to Welcome
     app.initialize().context("Failed to initialize application")?;
 
+    // MVP milestone: enumerate disks and enforce "abort if multiple eligible disks".
+    app.log_step("[..] Enumerating eligible disks");
+    render_frame(&app, &mut *ui)?;
+    match platform::disks::DiskScanner::new_default().choose_single_target_disk() {
+        Ok(disk) => {
+            app.log_step(format!(
+                "[OK] Target disk: {} ({} bytes)",
+                disk.dev_path.display(),
+                disk.size_bytes
+            ));
+        }
+        Err(e) => {
+            app.handle_error(format!("Disk selection failed: {e:#}"));
+        }
+    }
+
     // Render initial screen
     render_frame(&app, &mut *ui)?;
 
