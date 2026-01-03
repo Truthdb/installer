@@ -2,6 +2,8 @@ use anyhow::{Context, Result, anyhow};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+const DEFAULT_PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
+
 const EFI_SYSTEM_PARTITION_GUID: &str = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B";
 const LINUX_FILESYSTEM_GUID: &str = "0FC63DAF-8483-4772-8E79-3D69D8477DE4";
 
@@ -56,7 +58,7 @@ pub fn expected_esp_and_root_partitions(disk: &Path) -> Result<(PathBuf, PathBuf
 fn partition_with_sfdisk(disk: &Path, plan: PartitionPlan) -> Result<()> {
     let script = sfdisk_gpt_script(plan);
 
-    let mut child = Command::new("sfdisk")
+    let mut child = command("sfdisk")
         .arg("--label")
         .arg("gpt")
         .arg(disk)
@@ -140,7 +142,7 @@ fn sfdisk_gpt_script(plan: PartitionPlan) -> String {
 }
 
 fn command_exists(program: &str) -> bool {
-    Command::new(program)
+    command(program)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -150,7 +152,7 @@ fn command_exists(program: &str) -> bool {
 }
 
 fn run(program: &str, args: &[&str]) -> Result<()> {
-    let output = Command::new(program)
+    let output = command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -166,6 +168,12 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     ))
+}
+
+fn command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.env("PATH", DEFAULT_PATH);
+    cmd
 }
 
 #[cfg(test)]
