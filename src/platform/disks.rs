@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,12 +18,12 @@ pub struct DiskScanner {
 }
 
 impl DiskScanner {
-    pub fn new(sys_root: impl Into<PathBuf>, proc_root: impl Into<PathBuf>, min_size_bytes: u64) -> Self {
-        Self {
-            sys_root: sys_root.into(),
-            proc_root: proc_root.into(),
-            min_size_bytes,
-        }
+    pub fn new(
+        sys_root: impl Into<PathBuf>,
+        proc_root: impl Into<PathBuf>,
+        min_size_bytes: u64,
+    ) -> Self {
+        Self { sys_root: sys_root.into(), proc_root: proc_root.into(), min_size_bytes }
     }
 
     pub fn new_default() -> Self {
@@ -60,7 +60,8 @@ impl DiskScanner {
                 continue;
             }
 
-            let size_bytes = disk_size_bytes(&disk_sys).with_context(|| format!("Failed to read size for {name}"))?;
+            let size_bytes = disk_size_bytes(&disk_sys)
+                .with_context(|| format!("Failed to read size for {name}"))?;
             if size_bytes < self.min_size_bytes {
                 continue;
             }
@@ -72,12 +73,7 @@ impl DiskScanner {
 
             let model = read_string(disk_sys.join("device").join("model")).ok();
 
-            disks.push(Disk {
-                name,
-                dev_path,
-                size_bytes,
-                model,
-            });
+            disks.push(Disk { name, dev_path, size_bytes, model });
         }
 
         disks.sort_by(|a, b| a.name.cmp(&b.name));
@@ -120,14 +116,16 @@ fn is_candidate_name(name: &str) -> bool {
 }
 
 fn read_u64(path: impl AsRef<Path>) -> Result<u64> {
-    let s = fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
+    let s = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
     let s = s.trim();
     s.parse::<u64>()
         .with_context(|| format!("Failed to parse '{}' from {}", s, path.as_ref().display()))
 }
 
 fn read_string(path: impl AsRef<Path>) -> Result<String> {
-    let s = fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
+    let s = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
     Ok(s.trim().to_string())
 }
 
