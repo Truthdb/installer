@@ -87,8 +87,7 @@ pub fn configure_boot_systemd_boot(
     write_fstab(&root_uuid, &esp_uuid, plan).context("Failed to write /etc/fstab")?;
 
     // Install systemd-boot into the mounted ESP.
-    run("bootctl", &["--esp-path", &plan.target_efi.display().to_string(), "install"])
-        .context("bootctl install failed")?;
+    install_systemd_boot_efi(&plan.target_efi).context("Failed to install systemd-boot EFI")?;
 
     // Copy the installed Debian kernel + initrd into ESP so systemd-boot can load them.
     let (kernel_src, initrd_src) = find_installed_kernel_and_initrd(&plan.target_root)
@@ -117,6 +116,33 @@ pub fn configure_boot_systemd_boot(
         &root_uuid,
     )
     .context("Failed to write systemd-boot entry")?;
+
+    Ok(())
+}
+
+fn install_systemd_boot_efi(esp_mount: &Path) -> Result<()> {
+    // The initramfs build copies /usr/lib/systemd/boot/efi into the initramfs.
+    // For x86_64 UEFI, the loader binary is systemd-bootx64.efi.
+    let src = Path::new("/usr/lib/systemd/boot/efi/systemd-bootx64.efi");
+    if !src.exists() {
+        return Err(anyhow!("Missing systemd-boot EFI binary in initramfs: {}", src.display()));
+    }
+
+    // UEFI removable media / fallback path.
+    let boot_dir = esp_mount.join("EFI/BOOT");
+    std::fs::create_dir_all(&boot_dir)
+        .with_context(|| format!("Failed to create {}", boot_dir.display()))?;
+    let fallback_dst = boot_dir.join("BOOTX64.EFI");
+    std::fs::copy(src, &fallback_dst)
+        .with_context(|| format!("Failed to copy systemd-boot to {}", fallback_dst.display()))?;
+
+    // Also place it at the conventional systemd location.
+    let systemd_dir = esp_mount.join("EFI/systemd");
+    std::fs::create_dir_all(&systemd_dir)
+        .with_context(|| format!("Failed to create {}", systemd_dir.display()))?;
+    let systemd_dst = systemd_dir.join("systemd-bootx64.efi");
+    std::fs::copy(src, &systemd_dst)
+        .with_context(|| format!("Failed to copy systemd-boot to {}", systemd_dst.display()))?;
 
     Ok(())
 }
