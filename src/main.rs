@@ -127,6 +127,8 @@ fn run() -> Result<()> {
                 render_frame(&app, &mut *ui)?;
                 if let Err(e) = platform::install::format_partitions(&esp, &root) {
                     app.handle_error(format!("Formatting failed: {e:#}"));
+                    render_frame(&app, &mut *ui)?;
+                    return Ok(());
                 } else {
                     app.log_step("[OK] Partitions formatted");
 
@@ -135,6 +137,8 @@ fn run() -> Result<()> {
                     let mount_plan = platform::install::MountPlan::default();
                     if let Err(e) = platform::install::mount_partitions(&esp, &root, &mount_plan) {
                         app.handle_error(format!("Mount failed: {e:#}"));
+                        render_frame(&app, &mut *ui)?;
+                        return Ok(());
                     } else {
                         app.log_step(format!(
                             "[OK] Mounted root at {}",
@@ -148,6 +152,9 @@ fn run() -> Result<()> {
                             &mount_plan.target_root,
                         ) {
                             app.handle_error(format!("Extract failed: {e:#}"));
+                            render_frame(&app, &mut *ui)?;
+                            let _ = platform::install::unmount_target(&mount_plan);
+                            return Ok(());
                         } else {
                             app.log_step("[OK] Rootfs extracted");
 
@@ -157,6 +164,9 @@ fn run() -> Result<()> {
                                 platform::install::configure_hostname(&mount_plan, "truthdb01")
                             {
                                 app.handle_error(format!("Hostname setup failed: {e:#}"));
+                                render_frame(&app, &mut *ui)?;
+                                let _ = platform::install::unmount_target(&mount_plan);
+                                return Ok(());
                             } else {
                                 app.log_step("[OK] Hostname configured");
                             }
@@ -168,6 +178,9 @@ fn run() -> Result<()> {
                             if let Err(e) = platform::install::configure_initial_users(&mount_plan)
                             {
                                 app.handle_error(format!("User setup failed: {e:#}"));
+                                render_frame(&app, &mut *ui)?;
+                                let _ = platform::install::unmount_target(&mount_plan);
+                                return Ok(());
                             } else {
                                 app.log_step("[OK] User/password configured");
                             }
@@ -178,6 +191,9 @@ fn run() -> Result<()> {
                                 platform::install::configure_first_boot_dhcp(&mount_plan)
                             {
                                 app.handle_error(format!("Networking setup failed: {e:#}"));
+                                render_frame(&app, &mut *ui)?;
+                                let _ = platform::install::unmount_target(&mount_plan);
+                                return Ok(());
                             } else {
                                 app.log_step("[OK] Networking configured (DHCP on boot)");
                             }
@@ -191,6 +207,9 @@ fn run() -> Result<()> {
                                 &mount_plan,
                             ) {
                                 app.handle_error(format!("Boot config failed: {e:#}"));
+                                render_frame(&app, &mut *ui)?;
+                                let _ = platform::install::unmount_target(&mount_plan);
+                                return Ok(());
                             } else {
                                 app.log_step("[OK] Boot configured");
 
@@ -198,6 +217,9 @@ fn run() -> Result<()> {
                                 render_frame(&app, &mut *ui)?;
                                 if let Err(e) = platform::install::sync_disks() {
                                     app.handle_error(format!("Sync failed: {e:#}"));
+                                    render_frame(&app, &mut *ui)?;
+                                    let _ = platform::install::unmount_target(&mount_plan);
+                                    return Ok(());
                                 } else {
                                     app.log_step("[OK] Disks synced");
 
@@ -205,6 +227,8 @@ fn run() -> Result<()> {
                                     render_frame(&app, &mut *ui)?;
                                     if let Err(e) = platform::install::unmount_target(&mount_plan) {
                                         app.handle_error(format!("Unmount failed: {e:#}"));
+                                        render_frame(&app, &mut *ui)?;
+                                        return Ok(());
                                     } else {
                                         app.log_step("[OK] Unmounted target");
                                         app.log_step(
