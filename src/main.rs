@@ -150,6 +150,18 @@ fn run() -> Result<()> {
                             app.handle_error(format!("Extract failed: {e:#}"));
                         } else {
                             app.log_step("[OK] Rootfs extracted");
+
+                            app.log_step("[..] Installing bootloader (systemd-boot)");
+                            render_frame(&app, &mut *ui)?;
+                            if let Err(e) = platform::install::configure_boot_systemd_boot(
+                                &esp,
+                                &root,
+                                &mount_plan,
+                            ) {
+                                app.handle_error(format!("Boot config failed: {e:#}"));
+                            } else {
+                                app.log_step("[OK] Boot configured");
+                            }
                         }
                     }
                 }
