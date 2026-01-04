@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -322,17 +323,55 @@ fn configure_systemd_networkd_dhcp(plan: &MountPlan) -> Result<()> {
     if resolved_enabled {
         // Point /etc/resolv.conf at the systemd-resolved stub.
         let resolv_conf = plan.target_root.join("etc/resolv.conf");
-        if resolv_conf.exists() {
-            let _ = std::fs::remove_file(&resolv_conf);
-        }
-        #[cfg(unix)]
-        {
-            unix_fs::symlink("/run/systemd/resolve/stub-resolv.conf", &resolv_conf)
-                .with_context(|| format!("Failed to symlink {}", resolv_conf.display()))?;
-        }
+        symlink_force("/run/systemd/resolve/stub-resolv.conf", &resolv_conf)
+            .with_context(|| format!("Failed to symlink {}", resolv_conf.display()))?;
     }
 
     Ok(())
+}
+
+fn symlink_force(src: &str, dst: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        // Best-effort remove whatever is there (file/symlink/dir). Debian images may ship a regular
+        // file at /etc/resolv.conf.
+        if dst.exists() {
+            match std::fs::symlink_metadata(dst) {
+                Ok(meta) if meta.is_dir() => {
+                    std::fs::remove_dir_all(dst)
+                        .with_context(|| format!("Failed to remove dir {}", dst.display()))?;
+                }
+                Ok(_) => {
+                    std::fs::remove_file(dst)
+                        .with_context(|| format!("Failed to remove file {}", dst.display()))?;
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(e).with_context(|| format!("Failed to stat {}", dst.display()));
+                }
+            }
+        }
+
+        // Create symlink; if something raced and recreated it, retry once.
+        match unix_fs::symlink(src, dst) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                let _ = std::fs::remove_file(dst);
+                unix_fs::symlink(src, dst)
+                    .with_context(|| format!("Failed to symlink {} -> {}", dst.display(), src))
+            }
+            Err(e) => {
+                Err(e).with_context(|| format!("Failed to symlink {} -> {}", dst.display(), src))
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = src;
+        let _ = dst;
+        Ok(())
+    }
 }
 
 fn enable_systemd_unit_optional(plan: &MountPlan, unit_name: &str) -> Result<bool> {
