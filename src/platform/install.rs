@@ -29,18 +29,20 @@ pub fn format_partitions(esp: &Path, root: &Path) -> Result<()> {
 }
 
 pub fn mount_partitions(esp: &Path, root: &Path, plan: &MountPlan) -> Result<()> {
-    // Ensure mount points exist.
+    // Ensure /mnt exists in the initramfs, then mount root.
     std::fs::create_dir_all(&plan.target_root)
         .with_context(|| format!("Failed to create {}", plan.target_root.display()))?;
-    std::fs::create_dir_all(&plan.target_efi)
-        .with_context(|| format!("Failed to create {}", plan.target_efi.display()))?;
 
-    // Mount root first.
+    // Mount root first. Anything created under /mnt before this will be hidden by the mount.
     run(
         "mount",
         &["-t", "ext4", &root.display().to_string(), &plan.target_root.display().to_string()],
     )
     .with_context(|| format!("Failed to mount root {}", root.display()))?;
+
+    // Now create the ESP mountpoint *inside the mounted root*.
+    std::fs::create_dir_all(&plan.target_efi)
+        .with_context(|| format!("Failed to create {}", plan.target_efi.display()))?;
 
     // Mount ESP.
     run(
