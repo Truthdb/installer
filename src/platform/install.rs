@@ -122,8 +122,9 @@ pub fn configure_boot_systemd_boot(
 
     // Some firmwares/VMs won't auto-scan the fallback path (EFI/BOOT/BOOTX64.EFI) on an internal
     // disk. Create an explicit NVRAM boot entry as well.
-    register_uefi_boot_entry(disk_dev)
-        .context("Failed to register UEFI boot entry with efibootmgr")?;
+    if let Err(e) = register_uefi_boot_entry(disk_dev) {
+        eprintln!("WARN: could not register UEFI boot entry (will rely on EFI fallback): {e:#}");
+    }
 
     Ok(())
 }
@@ -166,7 +167,7 @@ pub fn unmount_target(plan: &MountPlan) -> Result<()> {
 fn register_uefi_boot_entry(disk_dev: &Path) -> Result<()> {
     // Only meaningful when booted in UEFI mode.
     if !Path::new("/sys/firmware/efi").exists() {
-        return Err(anyhow!("Not running under UEFI (/sys/firmware/efi missing)"));
+        return Ok(());
     }
 
     // Ensure efivarfs is mounted; efibootmgr needs it.
@@ -183,10 +184,34 @@ fn register_uefi_boot_entry(disk_dev: &Path) -> Result<()> {
     let efi_loader = r"\\EFI\\systemd\\systemd-bootx64.efi";
     let disk = disk_dev.display().to_string();
 
-    run("efibootmgr", &["-c", "-d", &disk, "-p", "1", "-L", "Debian (TruthDB)", "-l", efi_loader])
-        .context("efibootmgr failed")?;
+    let output = command("efibootmgr")
+        .args(["-c", "-d", &disk, "-p", "1", "-L", "Debian (TruthDB)", "-l", efi_loader])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to execute efibootmgr")?;
 
-    Ok(())
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Common in some VM configs (or when efivarfs isn't available): we can't write NVRAM vars.
+    // This should not be fatal as long as the ESP fallback loader exists.
+    if stderr.contains("EFI variables are not supported")
+        || stderr.contains("Could not prepare boot variable")
+        || stderr.contains("Operation not permitted")
+        || stderr.contains("Read-only file system")
+    {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "efibootmgr failed: stdout='{}' stderr='{}'",
+        String::from_utf8_lossy(&output.stdout),
+        stderr
+    ))
 }
 
 fn install_systemd_boot_efi(esp_mount: &Path) -> Result<()> {
