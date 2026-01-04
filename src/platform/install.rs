@@ -76,6 +76,148 @@ pub fn extract_rootfs_payload(payload: &Path, target_root: &Path) -> Result<()> 
     })
 }
 
+pub fn configure_boot_systemd_boot(
+    esp_dev: &Path,
+    root_dev: &Path,
+    plan: &MountPlan,
+) -> Result<()> {
+    let root_uuid = blkid_uuid(root_dev).context("Failed to get root UUID")?;
+    let esp_uuid = blkid_uuid(esp_dev).context("Failed to get ESP UUID")?;
+
+    write_fstab(&root_uuid, &esp_uuid, plan).context("Failed to write /etc/fstab")?;
+
+    // Install systemd-boot into the mounted ESP.
+    run("bootctl", &["--esp-path", &plan.target_efi.display().to_string(), "install"])
+        .context("bootctl install failed")?;
+
+    // Copy the installed Debian kernel + initrd into ESP so systemd-boot can load them.
+    let (kernel_src, initrd_src) = find_installed_kernel_and_initrd(&plan.target_root)
+        .context("Failed to locate installed kernel/initrd under /boot")?;
+
+    let kernel_rel = Path::new("EFI/debian/vmlinuz");
+    let initrd_rel = Path::new("EFI/debian/initrd.img");
+    let kernel_dst = plan.target_efi.join(kernel_rel);
+    let initrd_dst = plan.target_efi.join(initrd_rel);
+
+    if let Some(parent) = kernel_dst.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    std::fs::copy(&kernel_src, &kernel_dst).with_context(|| {
+        format!("Failed to copy kernel {} to {}", kernel_src.display(), kernel_dst.display())
+    })?;
+    std::fs::copy(&initrd_src, &initrd_dst).with_context(|| {
+        format!("Failed to copy initrd {} to {}", initrd_src.display(), initrd_dst.display())
+    })?;
+
+    write_systemd_boot_entry(
+        &plan.target_efi,
+        "/EFI/debian/vmlinuz",
+        "/EFI/debian/initrd.img",
+        &root_uuid,
+    )
+    .context("Failed to write systemd-boot entry")?;
+
+    Ok(())
+}
+
+fn write_fstab(root_uuid: &str, esp_uuid: &str, plan: &MountPlan) -> Result<()> {
+    let etc_dir = plan.target_root.join("etc");
+    std::fs::create_dir_all(&etc_dir)
+        .with_context(|| format!("Failed to create {}", etc_dir.display()))?;
+
+    let fstab_path = etc_dir.join("fstab");
+    let contents = format!(
+        "# /etc/fstab: static file system information.\n\
+UUID={root_uuid} / ext4 defaults 0 1\n\
+UUID={esp_uuid} /boot/efi vfat umask=0077 0 1\n"
+    );
+    std::fs::write(&fstab_path, contents)
+        .with_context(|| format!("Failed to write {}", fstab_path.display()))
+}
+
+fn write_systemd_boot_entry(
+    esp_mount: &Path,
+    linux_path: &str,
+    initrd_path: &str,
+    root_uuid: &str,
+) -> Result<()> {
+    let loader_dir = esp_mount.join("loader");
+    let entries_dir = loader_dir.join("entries");
+    std::fs::create_dir_all(&entries_dir)
+        .with_context(|| format!("Failed to create {}", entries_dir.display()))?;
+
+    // Keep it simple: default entry and a single debian.conf.
+    let loader_conf = loader_dir.join("loader.conf");
+    std::fs::write(&loader_conf, "default debian.conf\ntimeout 0\nconsole-mode keep\n")
+        .with_context(|| format!("Failed to write {}", loader_conf.display()))?;
+
+    let entry = format!(
+        "title   Debian (TruthDB)\n\
+linux   {linux_path}\n\
+initrd  {initrd_path}\n\
+options root=UUID={root_uuid} rw\n"
+    );
+    let entry_path = entries_dir.join("debian.conf");
+    std::fs::write(&entry_path, entry)
+        .with_context(|| format!("Failed to write {}", entry_path.display()))
+}
+
+fn blkid_uuid(dev: &Path) -> Result<String> {
+    let output = command("blkid")
+        .args(["-s", "UUID", "-o", "value", &dev.display().to_string()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("Failed to execute blkid for {}", dev.display()))?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "blkid failed for {}: stdout='{}' stderr='{}'",
+            dev.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let uuid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if uuid.is_empty() {
+        return Err(anyhow!("blkid returned empty UUID for {}", dev.display()));
+    }
+    Ok(uuid)
+}
+
+fn find_installed_kernel_and_initrd(target_root: &Path) -> Result<(PathBuf, PathBuf)> {
+    let boot = target_root.join("boot");
+    let mut kernels: Vec<PathBuf> = Vec::new();
+    let mut initrds: Vec<PathBuf> = Vec::new();
+
+    for entry in
+        std::fs::read_dir(&boot).with_context(|| format!("Failed to read {}", boot.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with("vmlinuz-") {
+            kernels.push(path);
+        } else if name.starts_with("initrd.img-") {
+            initrds.push(path);
+        }
+    }
+
+    kernels.sort();
+    initrds.sort();
+
+    let kernel =
+        kernels.pop().ok_or_else(|| anyhow!("No vmlinuz-* found under {}", boot.display()))?;
+    let initrd =
+        initrds.pop().ok_or_else(|| anyhow!("No initrd.img-* found under {}", boot.display()))?;
+
+    Ok((kernel, initrd))
+}
+
 fn run(program: &str, args: &[&str]) -> Result<()> {
     let output = command(program)
         .args(args)
