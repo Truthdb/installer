@@ -172,6 +172,16 @@ fn run() -> Result<()> {
                                 app.log_step("[OK] User/password configured");
                             }
 
+                            app.log_step("[..] Enabling DHCP networking (systemd-networkd)");
+                            render_frame(&app, &mut *ui)?;
+                            if let Err(e) =
+                                platform::install::configure_first_boot_dhcp(&mount_plan)
+                            {
+                                app.handle_error(format!("Networking setup failed: {e:#}"));
+                            } else {
+                                app.log_step("[OK] Networking configured (DHCP on boot)");
+                            }
+
                             app.log_step("[..] Installing bootloader (systemd-boot)");
                             render_frame(&app, &mut *ui)?;
                             if let Err(e) = platform::install::configure_boot_systemd_boot(
