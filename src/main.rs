@@ -88,7 +88,11 @@ fn run() -> Result<()> {
         }
     };
 
-    if let Some(disk) = target_disk {
+    'install: {
+        let Some(disk) = target_disk else {
+            break 'install;
+        };
+
         let payload_path = Path::new("/payload/debian-minbase-amd64-bookworm.tar.zst");
         app.log_step("[..] Checking Debian rootfs payload");
         render_frame(&app, &mut *ui)?;
@@ -96,7 +100,7 @@ fn run() -> Result<()> {
             app.handle_error(format!("Missing rootfs payload: {}", payload_path.display()));
             // Do not perform destructive disk operations without a payload to install.
             render_frame(&app, &mut *ui)?;
-            return Ok(());
+            break 'install;
         }
         app.log_step("[OK] Rootfs payload present");
 
@@ -128,7 +132,7 @@ fn run() -> Result<()> {
                 if let Err(e) = platform::install::format_partitions(&esp, &root) {
                     app.handle_error(format!("Formatting failed: {e:#}"));
                     render_frame(&app, &mut *ui)?;
-                    return Ok(());
+                    break 'install;
                 } else {
                     app.log_step("[OK] Partitions formatted");
 
@@ -138,7 +142,7 @@ fn run() -> Result<()> {
                     if let Err(e) = platform::install::mount_partitions(&esp, &root, &mount_plan) {
                         app.handle_error(format!("Mount failed: {e:#}"));
                         render_frame(&app, &mut *ui)?;
-                        return Ok(());
+                        break 'install;
                     } else {
                         app.log_step(format!(
                             "[OK] Mounted root at {}",
@@ -154,7 +158,7 @@ fn run() -> Result<()> {
                             app.handle_error(format!("Extract failed: {e:#}"));
                             render_frame(&app, &mut *ui)?;
                             let _ = platform::install::unmount_target(&mount_plan);
-                            return Ok(());
+                            break 'install;
                         } else {
                             app.log_step("[OK] Rootfs extracted");
 
@@ -166,7 +170,7 @@ fn run() -> Result<()> {
                                 app.handle_error(format!("Hostname setup failed: {e:#}"));
                                 render_frame(&app, &mut *ui)?;
                                 let _ = platform::install::unmount_target(&mount_plan);
-                                return Ok(());
+                                break 'install;
                             } else {
                                 app.log_step("[OK] Hostname configured");
                             }
@@ -180,7 +184,7 @@ fn run() -> Result<()> {
                                 app.handle_error(format!("User setup failed: {e:#}"));
                                 render_frame(&app, &mut *ui)?;
                                 let _ = platform::install::unmount_target(&mount_plan);
-                                return Ok(());
+                                break 'install;
                             } else {
                                 app.log_step("[OK] User/password configured");
                             }
@@ -193,7 +197,7 @@ fn run() -> Result<()> {
                                 app.handle_error(format!("Networking setup failed: {e:#}"));
                                 render_frame(&app, &mut *ui)?;
                                 let _ = platform::install::unmount_target(&mount_plan);
-                                return Ok(());
+                                break 'install;
                             } else {
                                 app.log_step("[OK] Networking configured (DHCP on boot)");
                             }
@@ -209,7 +213,7 @@ fn run() -> Result<()> {
                                 app.handle_error(format!("Boot config failed: {e:#}"));
                                 render_frame(&app, &mut *ui)?;
                                 let _ = platform::install::unmount_target(&mount_plan);
-                                return Ok(());
+                                break 'install;
                             } else {
                                 app.log_step("[OK] Boot configured");
 
@@ -219,7 +223,7 @@ fn run() -> Result<()> {
                                     app.handle_error(format!("Sync failed: {e:#}"));
                                     render_frame(&app, &mut *ui)?;
                                     let _ = platform::install::unmount_target(&mount_plan);
-                                    return Ok(());
+                                    break 'install;
                                 } else {
                                     app.log_step("[OK] Disks synced");
 
@@ -228,7 +232,7 @@ fn run() -> Result<()> {
                                     if let Err(e) = platform::install::unmount_target(&mount_plan) {
                                         app.handle_error(format!("Unmount failed: {e:#}"));
                                         render_frame(&app, &mut *ui)?;
-                                        return Ok(());
+                                        break 'install;
                                     } else {
                                         app.log_step("[OK] Unmounted target");
                                         app.log_step(
