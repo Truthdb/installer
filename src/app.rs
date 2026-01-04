@@ -121,7 +121,9 @@ impl App {
     /// Handle error condition
     pub fn handle_error(&mut self, error: String) {
         warn!("Application error: {}", error);
-        self.log_step(format!("[ERR] {}", error));
+        for line in wrap_for_ui(&error, 78, "[ERR] ", "      ") {
+            self.log_step(line);
+        }
         self.state = AppState::Error(error);
     }
 
@@ -144,6 +146,38 @@ impl App {
 
         lines
     }
+}
+
+fn wrap_for_ui(text: &str, width: usize, first_prefix: &str, next_prefix: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut remaining = text.trim();
+
+    let mut is_first = true;
+    while !remaining.is_empty() {
+        let prefix = if is_first { first_prefix } else { next_prefix };
+        let avail = width.saturating_sub(prefix.len()).max(10);
+
+        if remaining.len() <= avail {
+            out.push(format!("{}{}", prefix, remaining));
+            break;
+        }
+
+        // Try to break on whitespace within the available width.
+        let mut split_at = avail;
+        if let Some(idx) = remaining[..avail].rfind(char::is_whitespace) {
+            // Avoid producing empty segments if whitespace is at the start.
+            if idx > 0 {
+                split_at = idx;
+            }
+        }
+
+        let (head, tail) = remaining.split_at(split_at);
+        out.push(format!("{}{}", prefix, head.trim_end()));
+        remaining = tail.trim_start();
+        is_first = false;
+    }
+
+    out
 }
 
 impl Default for App {

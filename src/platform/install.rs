@@ -188,8 +188,58 @@ pub fn configure_hostname(plan: &MountPlan, hostname: &str) -> Result<()> {
 }
 
 pub fn configure_first_boot_dhcp(plan: &MountPlan) -> Result<()> {
-    ensure_systemd_pid1(plan).context("Failed to ensure systemd is PID 1")?;
+    // Configure networking first so DHCP works even if other tweaks fail.
+    ensure_machine_id(plan).context("Failed to ensure machine-id")?;
     configure_systemd_networkd_dhcp(plan).context("Failed to configure systemd-networkd DHCP")?;
+
+    // Best-effort: some payloads or usr-merge layouts can make /sbin/init handling surprising.
+    // DHCP should not be blocked by this.
+    if let Err(e) = ensure_systemd_pid1(plan) {
+        eprintln!("WARN: could not ensure systemd is PID 1: {e:#}");
+    }
+    Ok(())
+}
+
+fn ensure_machine_id(plan: &MountPlan) -> Result<()> {
+    let machine_id_path = plan.target_root.join("etc/machine-id");
+    if let Ok(contents) = std::fs::read_to_string(&machine_id_path)
+        && contents.trim().len() >= 32
+    {
+        return Ok(());
+    }
+
+    // Generate a deterministic-length id from the kernel UUID source.
+    // /proc should be mounted in the initramfs environment.
+    let uuid = std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .context("Failed to read /proc/sys/kernel/random/uuid")?;
+    let id: String = uuid.chars().filter(|c| c.is_ascii_hexdigit()).take(32).collect();
+    if id.len() != 32 {
+        return Err(anyhow!("Failed to derive a 32-hex machine-id from kernel uuid"));
+    }
+
+    if let Some(parent) = machine_id_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    std::fs::write(&machine_id_path, format!("{}\n", id))
+        .with_context(|| format!("Failed to write {}", machine_id_path.display()))?;
+
+    // Debian dbus historically also uses /var/lib/dbus/machine-id.
+    // Keep it in sync via symlink when possible.
+    let dbus_machine_id = plan.target_root.join("var/lib/dbus/machine-id");
+    if let Some(parent) = dbus_machine_id.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    if dbus_machine_id.exists() {
+        let _ = std::fs::remove_file(&dbus_machine_id);
+    }
+    #[cfg(unix)]
+    {
+        unix_fs::symlink("/etc/machine-id", &dbus_machine_id)
+            .with_context(|| format!("Failed to symlink {}", dbus_machine_id.display()))?;
+    }
+
     Ok(())
 }
 
@@ -270,6 +320,7 @@ fn configure_systemd_networkd_dhcp(plan: &MountPlan) -> Result<()> {
     // Point /etc/resolv.conf at the systemd-resolved stub.
     let resolv_conf = plan.target_root.join("etc/resolv.conf");
     if resolv_conf.exists() {
+        // Might be a file or a symlink; handle both.
         let _ = std::fs::remove_file(&resolv_conf);
     }
     #[cfg(unix)]
@@ -581,7 +632,7 @@ fn write_systemd_boot_entry(
         "title   Debian (TruthDB)\n\
 linux   {linux_path}\n\
 initrd  {initrd_path}\n\
-options root=UUID={root_uuid} rw\n"
+options root=UUID={root_uuid} rw init=/lib/systemd/systemd\n"
     );
     let entry_path = entries_dir.join("debian.conf");
     std::fs::write(&entry_path, entry)
