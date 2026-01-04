@@ -77,6 +77,7 @@ pub fn extract_rootfs_payload(payload: &Path, target_root: &Path) -> Result<()> 
 }
 
 pub fn configure_boot_systemd_boot(
+    disk_dev: &Path,
     esp_dev: &Path,
     root_dev: &Path,
     plan: &MountPlan,
@@ -116,6 +117,74 @@ pub fn configure_boot_systemd_boot(
         &root_uuid,
     )
     .context("Failed to write systemd-boot entry")?;
+
+    verify_esp_layout(&plan.target_efi).context("ESP does not contain expected boot files")?;
+
+    // Some firmwares/VMs won't auto-scan the fallback path (EFI/BOOT/BOOTX64.EFI) on an internal
+    // disk. Create an explicit NVRAM boot entry as well.
+    register_uefi_boot_entry(disk_dev)
+        .context("Failed to register UEFI boot entry with efibootmgr")?;
+
+    Ok(())
+}
+
+fn verify_esp_layout(esp_mount: &Path) -> Result<()> {
+    let must_exist = [
+        esp_mount.join("EFI/BOOT/BOOTX64.EFI"),
+        esp_mount.join("EFI/systemd/systemd-bootx64.efi"),
+        esp_mount.join("loader/loader.conf"),
+        esp_mount.join("loader/entries/debian.conf"),
+        esp_mount.join("EFI/debian/vmlinuz"),
+        esp_mount.join("EFI/debian/initrd.img"),
+    ];
+
+    for path in must_exist {
+        if !path.exists() {
+            return Err(anyhow!("Missing on ESP: {}", path.display()));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn sync_disks() -> Result<()> {
+    // We only have busybox in initramfs by default; call its applet directly.
+    run("/bin/busybox", &["sync"]).context("busybox sync failed")
+}
+
+pub fn unmount_target(plan: &MountPlan) -> Result<()> {
+    // Unmount ESP first (it is nested under the root mount), then root.
+    run("umount", &[&plan.target_efi.display().to_string()])
+        .with_context(|| format!("Failed to umount {}", plan.target_efi.display()))?;
+
+    run("umount", &[&plan.target_root.display().to_string()])
+        .with_context(|| format!("Failed to umount {}", plan.target_root.display()))?;
+
+    Ok(())
+}
+
+fn register_uefi_boot_entry(disk_dev: &Path) -> Result<()> {
+    // Only meaningful when booted in UEFI mode.
+    if !Path::new("/sys/firmware/efi").exists() {
+        return Err(anyhow!("Not running under UEFI (/sys/firmware/efi missing)"));
+    }
+
+    // Ensure efivarfs is mounted; efibootmgr needs it.
+    let efivars = Path::new("/sys/firmware/efi/efivars");
+    std::fs::create_dir_all(efivars)
+        .with_context(|| format!("Failed to create {}", efivars.display()))?;
+
+    // Ignore mount errors if it is already mounted; if it's not mounted, efibootmgr will fail and
+    // we'll surface that error.
+    let _ = run("mount", &["-t", "efivarfs", "efivarfs", &efivars.display().to_string()]);
+
+    // ESP is always partition 1 in our GPT layout.
+    // Note: efibootmgr expects the EFI path with backslashes.
+    let efi_loader = r"\\EFI\\systemd\\systemd-bootx64.efi";
+    let disk = disk_dev.display().to_string();
+
+    run("efibootmgr", &["-c", "-d", &disk, "-p", "1", "-L", "Debian (TruthDB)", "-l", efi_loader])
+        .context("efibootmgr failed")?;
 
     Ok(())
 }

@@ -154,6 +154,7 @@ fn run() -> Result<()> {
                             app.log_step("[..] Installing bootloader (systemd-boot)");
                             render_frame(&app, &mut *ui)?;
                             if let Err(e) = platform::install::configure_boot_systemd_boot(
+                                &disk.dev_path,
                                 &esp,
                                 &root,
                                 &mount_plan,
@@ -161,6 +162,25 @@ fn run() -> Result<()> {
                                 app.handle_error(format!("Boot config failed: {e:#}"));
                             } else {
                                 app.log_step("[OK] Boot configured");
+
+                                app.log_step("[..] Syncing disks");
+                                render_frame(&app, &mut *ui)?;
+                                if let Err(e) = platform::install::sync_disks() {
+                                    app.handle_error(format!("Sync failed: {e:#}"));
+                                } else {
+                                    app.log_step("[OK] Disks synced");
+
+                                    app.log_step("[..] Unmounting target");
+                                    render_frame(&app, &mut *ui)?;
+                                    if let Err(e) = platform::install::unmount_target(&mount_plan) {
+                                        app.handle_error(format!("Unmount failed: {e:#}"));
+                                    } else {
+                                        app.log_step("[OK] Unmounted target");
+                                        app.log_step(
+                                            "[OK] Install complete (reboot and remove ISO)",
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
