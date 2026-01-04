@@ -2,6 +2,9 @@ use anyhow::{Context, Result, anyhow};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+
 const DEFAULT_PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
 
 #[derive(Debug, Clone)]
@@ -184,6 +187,12 @@ pub fn configure_hostname(plan: &MountPlan, hostname: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn configure_first_boot_dhcp(plan: &MountPlan) -> Result<()> {
+    ensure_systemd_pid1(plan).context("Failed to ensure systemd is PID 1")?;
+    configure_systemd_networkd_dhcp(plan).context("Failed to configure systemd-networkd DHCP")?;
+    Ok(())
+}
+
 pub fn configure_boot_systemd_boot(
     disk_dev: &Path,
     esp_dev: &Path,
@@ -234,6 +243,135 @@ pub fn configure_boot_systemd_boot(
         eprintln!("WARN: could not register UEFI boot entry (will rely on EFI fallback): {e:#}");
     }
 
+    Ok(())
+}
+
+fn configure_systemd_networkd_dhcp(plan: &MountPlan) -> Result<()> {
+    // Configure DHCP on first boot using systemd-networkd so we don't depend on interface names
+    // being known (enp*, ens*, eth* ...).
+    let network_dir = plan.target_root.join("etc/systemd/network");
+    std::fs::create_dir_all(&network_dir)
+        .with_context(|| format!("Failed to create {}", network_dir.display()))?;
+
+    let dhcp_network = network_dir.join("20-dhcp.network");
+    // Match common wired + wifi patterns. Keep it conservative; networking is required for bring-up.
+    let contents = "[Match]\nName=en* eth* wl* ww* usb*\n\n[Network]\nDHCP=yes\nIPv6AcceptRA=yes\n";
+    std::fs::write(&dhcp_network, contents)
+        .with_context(|| format!("Failed to write {}", dhcp_network.display()))?;
+
+    // Enable systemd-networkd + wait-online + resolved offline (symlinks under /etc/systemd/system).
+    enable_systemd_unit(plan, "systemd-networkd.service")
+        .context("Failed to enable systemd-networkd")?;
+    enable_systemd_unit(plan, "systemd-networkd-wait-online.service")
+        .context("Failed to enable systemd-networkd-wait-online")?;
+    enable_systemd_unit(plan, "systemd-resolved.service")
+        .context("Failed to enable systemd-resolved")?;
+
+    // Point /etc/resolv.conf at the systemd-resolved stub.
+    let resolv_conf = plan.target_root.join("etc/resolv.conf");
+    if resolv_conf.exists() {
+        let _ = std::fs::remove_file(&resolv_conf);
+    }
+    #[cfg(unix)]
+    {
+        unix_fs::symlink("/run/systemd/resolve/stub-resolv.conf", &resolv_conf)
+            .with_context(|| format!("Failed to symlink {}", resolv_conf.display()))?;
+    }
+
+    Ok(())
+}
+
+fn enable_systemd_unit(plan: &MountPlan, unit_name: &str) -> Result<()> {
+    let unit_src = find_systemd_unit_file(&plan.target_root, unit_name)?;
+
+    let wants_dir = plan.target_root.join("etc/systemd/system/multi-user.target.wants");
+    std::fs::create_dir_all(&wants_dir)
+        .with_context(|| format!("Failed to create {}", wants_dir.display()))?;
+
+    let link_path = wants_dir.join(unit_name);
+    if link_path.exists() {
+        // If it's already enabled, keep it.
+        return Ok(());
+    }
+
+    let link_target = path_in_target_root(&plan.target_root, &unit_src)?;
+
+    #[cfg(unix)]
+    {
+        unix_fs::symlink(&link_target, &link_path).with_context(|| {
+            format!("Failed to create symlink {} -> {}", link_path.display(), link_target)
+        })?;
+    }
+
+    Ok(())
+}
+
+fn find_systemd_unit_file(target_root: &Path, unit_name: &str) -> Result<PathBuf> {
+    // Debian typically uses /lib/systemd/system; some distros use /usr/lib/systemd/system.
+    let candidates = [
+        target_root.join("lib/systemd/system").join(unit_name),
+        target_root.join("usr/lib/systemd/system").join(unit_name),
+    ];
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(anyhow!(
+        "Missing systemd unit file '{}' in target root (expected under /lib/systemd/system or /usr/lib/systemd/system). Ensure payload includes systemd.",
+        unit_name
+    ))
+}
+
+fn path_in_target_root(target_root: &Path, absolute_in_target: &Path) -> Result<String> {
+    let rel = absolute_in_target.strip_prefix(target_root).with_context(|| {
+        format!(
+            "Path {} is not under target root {}",
+            absolute_in_target.display(),
+            target_root.display()
+        )
+    })?;
+    Ok(format!("/{}", rel.display()))
+}
+
+fn ensure_systemd_pid1(plan: &MountPlan) -> Result<()> {
+    // If the payload is missing systemd-sysv, Debian may boot with sysvinit, and systemctl will fail.
+    // Force /sbin/init to systemd when systemd is present.
+    let systemd_bin_candidates = [
+        plan.target_root.join("lib/systemd/systemd"),
+        plan.target_root.join("usr/lib/systemd/systemd"),
+    ];
+    let systemd_bin = systemd_bin_candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| {
+            anyhow!(
+                "Target rootfs is missing systemd binary (/lib/systemd/systemd). Ensure payload includes systemd-sysv."
+            )
+        })?;
+
+    let init_path = plan.target_root.join("sbin/init");
+    if init_path.exists() {
+        // If it's already a symlink to systemd, keep it.
+        if let Ok(link) = std::fs::read_link(&init_path) {
+            // Normalize both absolute and relative symlinks.
+            let link_str = link.to_string_lossy();
+            if link_str.contains("systemd") {
+                return Ok(());
+            }
+        }
+        let _ = std::fs::remove_file(&init_path);
+    } else if let Some(parent) = init_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+
+    let link_target = path_in_target_root(&plan.target_root, &systemd_bin)?;
+    #[cfg(unix)]
+    {
+        unix_fs::symlink(&link_target, &init_path)
+            .with_context(|| format!("Failed to set {} -> {}", init_path.display(), link_target))?;
+    }
     Ok(())
 }
 
