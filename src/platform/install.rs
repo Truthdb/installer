@@ -76,6 +76,114 @@ pub fn extract_rootfs_payload(payload: &Path, target_root: &Path) -> Result<()> 
     })
 }
 
+pub fn configure_initial_users(plan: &MountPlan) -> Result<()> {
+    let username = "truthdb";
+    let password = "123456";
+
+    // Ensure sudo is present in the payload; otherwise the user won't actually be able to elevate.
+    let sudo_path = plan.target_root.join("usr/bin/sudo");
+    if !sudo_path.exists() {
+        return Err(anyhow!(
+            "Target rootfs is missing sudo (expected {}). Ensure payload includes sudo.",
+            sudo_path.display()
+        ));
+    }
+
+    // Ensure required user-management tools exist in the target rootfs.
+    for required in [
+        plan.target_root.join("usr/sbin/groupadd"),
+        plan.target_root.join("usr/sbin/useradd"),
+        plan.target_root.join("usr/sbin/chpasswd"),
+    ] {
+        if !required.exists() {
+            return Err(anyhow!("Missing in target rootfs: {}", required.display()));
+        }
+    }
+
+    // Ensure the sudo group exists (on Debian it's usually created by the sudo package, but keep
+    // this resilient).
+    chroot_run(&plan.target_root, "/usr/sbin/groupadd", &["-f", "sudo"])
+        .context("Failed to ensure sudo group exists")?;
+
+    if !target_user_exists(&plan.target_root, username).unwrap_or(false) {
+        // Create a normal user with home dir and bash shell.
+        chroot_run(
+            &plan.target_root,
+            "/usr/sbin/useradd",
+            &["-m", "-s", "/bin/bash", "-G", "sudo", username],
+        )
+        .context("Failed to create truthdb user")?;
+    }
+
+    // Set user and root passwords.
+    chroot_chpasswd(&plan.target_root, username, password)
+        .context("Failed to set truthdb password")?;
+    chroot_chpasswd(&plan.target_root, "root", password).context("Failed to set root password")?;
+
+    Ok(())
+}
+
+pub fn configure_hostname(plan: &MountPlan, hostname: &str) -> Result<()> {
+    let etc_dir = plan.target_root.join("etc");
+    std::fs::create_dir_all(&etc_dir)
+        .with_context(|| format!("Failed to create {}", etc_dir.display()))?;
+
+    let hostname_path = etc_dir.join("hostname");
+    std::fs::write(&hostname_path, format!("{}\n", hostname))
+        .with_context(|| format!("Failed to write {}", hostname_path.display()))?;
+
+    let hosts_path = etc_dir.join("hosts");
+    let existing = if hosts_path.exists() {
+        std::fs::read_to_string(&hosts_path)
+            .with_context(|| format!("Failed to read {}", hosts_path.display()))?
+    } else {
+        String::new()
+    };
+
+    let mut out: Vec<String> = Vec::new();
+    let mut has_localhost = false;
+    let mut wrote_127_0_1_1 = false;
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("127.0.0.1") {
+            has_localhost = true;
+        }
+        if trimmed.starts_with("127.0.1.1") {
+            // Replace any existing 127.0.1.1 mapping with ours.
+            if !wrote_127_0_1_1 {
+                out.push(format!("127.0.1.1\t{}", hostname));
+                wrote_127_0_1_1 = true;
+            }
+            continue;
+        }
+        out.push(line.to_string());
+    }
+
+    if !has_localhost {
+        out.push("127.0.0.1\tlocalhost".to_string());
+    }
+    if !wrote_127_0_1_1 {
+        out.push(format!("127.0.1.1\t{}", hostname));
+    }
+
+    // Append IPv6 defaults if missing.
+    let mut final_hosts = out.join("\n");
+    if !final_hosts.ends_with('\n') {
+        final_hosts.push('\n');
+    }
+    if !final_hosts.contains("::1") {
+        final_hosts.push_str("::1\tlocalhost ip6-localhost ip6-loopback\n");
+        final_hosts.push_str("ff02::1\tip6-allnodes\n");
+        final_hosts.push_str("ff02::2\tip6-allrouters\n");
+    }
+
+    std::fs::write(&hosts_path, final_hosts)
+        .with_context(|| format!("Failed to write {}", hosts_path.display()))?;
+
+    Ok(())
+}
+
 pub fn configure_boot_systemd_boot(
     disk_dev: &Path,
     esp_dev: &Path,
@@ -211,6 +319,65 @@ fn register_uefi_boot_entry(disk_dev: &Path) -> Result<()> {
         "efibootmgr failed: stdout='{}' stderr='{}'",
         String::from_utf8_lossy(&output.stdout),
         stderr
+    ))
+}
+
+fn target_user_exists(target_root: &Path, username: &str) -> Result<bool> {
+    let passwd_path = target_root.join("etc/passwd");
+    let contents = std::fs::read_to_string(&passwd_path)
+        .with_context(|| format!("Failed to read {}", passwd_path.display()))?;
+    Ok(contents.lines().any(|line| line.starts_with(&format!("{username}:"))))
+}
+
+fn chroot_run(target_root: &Path, program_in_chroot: &str, args: &[&str]) -> Result<()> {
+    let output = command("chroot")
+        .arg(target_root)
+        .arg(program_in_chroot)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("Failed to execute chroot {}", program_in_chroot))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "chroot {} failed: stdout='{}' stderr='{}'",
+        program_in_chroot,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+fn chroot_chpasswd(target_root: &Path, username: &str, password: &str) -> Result<()> {
+    let input = format!("{username}:{password}\n");
+
+    let mut cmd = command("chroot");
+    cmd.arg(target_root)
+        .arg("/usr/sbin/chpasswd")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().context("Failed to spawn chroot for chpasswd")?;
+    {
+        use std::io::Write;
+        let stdin =
+            child.stdin.as_mut().ok_or_else(|| anyhow!("Failed to open stdin for chpasswd"))?;
+        stdin.write_all(input.as_bytes()).context("Failed to write chpasswd input")?;
+    }
+
+    let output = child.wait_with_output().context("Failed to wait for chpasswd")?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "chpasswd failed: stdout='{}' stderr='{}'",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     ))
 }
 

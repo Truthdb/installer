@@ -151,6 +151,27 @@ fn run() -> Result<()> {
                         } else {
                             app.log_step("[OK] Rootfs extracted");
 
+                            app.log_step("[..] Setting hostname to truthdb01");
+                            render_frame(&app, &mut *ui)?;
+                            if let Err(e) =
+                                platform::install::configure_hostname(&mount_plan, "truthdb01")
+                            {
+                                app.handle_error(format!("Hostname setup failed: {e:#}"));
+                            } else {
+                                app.log_step("[OK] Hostname configured");
+                            }
+
+                            app.log_step(
+                                "[..] Creating initial user (truthdb) + setting passwords",
+                            );
+                            render_frame(&app, &mut *ui)?;
+                            if let Err(e) = platform::install::configure_initial_users(&mount_plan)
+                            {
+                                app.handle_error(format!("User setup failed: {e:#}"));
+                            } else {
+                                app.log_step("[OK] User/password configured");
+                            }
+
                             app.log_step("[..] Installing bootloader (systemd-boot)");
                             render_frame(&app, &mut *ui)?;
                             if let Err(e) = platform::install::configure_boot_systemd_boot(
