@@ -309,27 +309,43 @@ fn configure_systemd_networkd_dhcp(plan: &MountPlan) -> Result<()> {
     std::fs::write(&dhcp_network, contents)
         .with_context(|| format!("Failed to write {}", dhcp_network.display()))?;
 
-    // Enable systemd-networkd + wait-online + resolved offline (symlinks under /etc/systemd/system).
+    // Enable systemd-networkd (+ optional companions) offline (symlinks under /etc/systemd/system).
     enable_systemd_unit(plan, "systemd-networkd.service")
         .context("Failed to enable systemd-networkd")?;
-    enable_systemd_unit(plan, "systemd-networkd-wait-online.service")
-        .context("Failed to enable systemd-networkd-wait-online")?;
-    enable_systemd_unit(plan, "systemd-resolved.service")
-        .context("Failed to enable systemd-resolved")?;
 
-    // Point /etc/resolv.conf at the systemd-resolved stub.
-    let resolv_conf = plan.target_root.join("etc/resolv.conf");
-    if resolv_conf.exists() {
-        // Might be a file or a symlink; handle both.
-        let _ = std::fs::remove_file(&resolv_conf);
-    }
-    #[cfg(unix)]
-    {
-        unix_fs::symlink("/run/systemd/resolve/stub-resolv.conf", &resolv_conf)
-            .with_context(|| format!("Failed to symlink {}", resolv_conf.display()))?;
+    // Wait-online improves reliability for services that want network-online.target, but don't
+    // hard-fail if it's missing from the payload.
+    enable_systemd_unit_optional(plan, "systemd-networkd-wait-online.service")?;
+
+    // systemd-resolved provides the stub resolver; if it's missing, DHCP can still assign an IP.
+    let resolved_enabled = enable_systemd_unit_optional(plan, "systemd-resolved.service")?;
+    if resolved_enabled {
+        // Point /etc/resolv.conf at the systemd-resolved stub.
+        let resolv_conf = plan.target_root.join("etc/resolv.conf");
+        if resolv_conf.exists() {
+            let _ = std::fs::remove_file(&resolv_conf);
+        }
+        #[cfg(unix)]
+        {
+            unix_fs::symlink("/run/systemd/resolve/stub-resolv.conf", &resolv_conf)
+                .with_context(|| format!("Failed to symlink {}", resolv_conf.display()))?;
+        }
     }
 
     Ok(())
+}
+
+fn enable_systemd_unit_optional(plan: &MountPlan, unit_name: &str) -> Result<bool> {
+    match find_systemd_unit_file(&plan.target_root, unit_name) {
+        Ok(_) => {
+            enable_systemd_unit(plan, unit_name)?;
+            Ok(true)
+        }
+        Err(e) => {
+            eprintln!("WARN: skipping enable of {unit_name}: {e:#}");
+            Ok(false)
+        }
+    }
 }
 
 fn enable_systemd_unit(plan: &MountPlan, unit_name: &str) -> Result<()> {
