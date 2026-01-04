@@ -122,6 +122,37 @@ fn run() -> Result<()> {
             {
                 app.log_step(format!("[OK] ESP partition: {}", esp.display()));
                 app.log_step(format!("[OK] Root partition: {}", root.display()));
+
+                app.log_step("[..] Formatting partitions (vfat+ext4)");
+                render_frame(&app, &mut *ui)?;
+                if let Err(e) = platform::install::format_partitions(&esp, &root) {
+                    app.handle_error(format!("Formatting failed: {e:#}"));
+                } else {
+                    app.log_step("[OK] Partitions formatted");
+
+                    app.log_step("[..] Mounting target filesystem");
+                    render_frame(&app, &mut *ui)?;
+                    let mount_plan = platform::install::MountPlan::default();
+                    if let Err(e) = platform::install::mount_partitions(&esp, &root, &mount_plan) {
+                        app.handle_error(format!("Mount failed: {e:#}"));
+                    } else {
+                        app.log_step(format!(
+                            "[OK] Mounted root at {}",
+                            mount_plan.target_root.display()
+                        ));
+
+                        app.log_step("[..] Extracting Debian rootfs payload");
+                        render_frame(&app, &mut *ui)?;
+                        if let Err(e) = platform::install::extract_rootfs_payload(
+                            payload_path,
+                            &mount_plan.target_root,
+                        ) {
+                            app.handle_error(format!("Extract failed: {e:#}"));
+                        } else {
+                            app.log_step("[OK] Rootfs extracted");
+                        }
+                    }
+                }
             }
         }
     }

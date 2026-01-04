@@ -4,6 +4,7 @@
 //! Currently placeholder for future implementation
 
 pub mod disks;
+pub mod install;
 pub mod partition;
 
 use anyhow::Result;
