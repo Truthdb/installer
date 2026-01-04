@@ -87,15 +87,8 @@ pub fn configure_boot_systemd_boot(
     write_fstab(&root_uuid, &esp_uuid, plan).context("Failed to write /etc/fstab")?;
 
     // Install systemd-boot into the mounted ESP.
-    run(
-        "bootctl",
-        &[
-            "--esp-path",
-            &plan.target_efi.display().to_string(),
-            "install",
-        ],
-    )
-    .context("bootctl install failed")?;
+    run("bootctl", &["--esp-path", &plan.target_efi.display().to_string(), "install"])
+        .context("bootctl install failed")?;
 
     // Copy the installed Debian kernel + initrd into ESP so systemd-boot can load them.
     let (kernel_src, initrd_src) = find_installed_kernel_and_initrd(&plan.target_root)
@@ -111,18 +104,10 @@ pub fn configure_boot_systemd_boot(
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
     std::fs::copy(&kernel_src, &kernel_dst).with_context(|| {
-        format!(
-            "Failed to copy kernel {} to {}",
-            kernel_src.display(),
-            kernel_dst.display()
-        )
+        format!("Failed to copy kernel {} to {}", kernel_src.display(), kernel_dst.display())
     })?;
     std::fs::copy(&initrd_src, &initrd_dst).with_context(|| {
-        format!(
-            "Failed to copy initrd {} to {}",
-            initrd_src.display(),
-            initrd_dst.display()
-        )
+        format!("Failed to copy initrd {} to {}", initrd_src.display(), initrd_dst.display())
     })?;
 
     write_systemd_boot_entry(
@@ -164,11 +149,8 @@ fn write_systemd_boot_entry(
 
     // Keep it simple: default entry and a single debian.conf.
     let loader_conf = loader_dir.join("loader.conf");
-    std::fs::write(
-        &loader_conf,
-        "default debian.conf\ntimeout 0\nconsole-mode keep\n",
-    )
-    .with_context(|| format!("Failed to write {}", loader_conf.display()))?;
+    std::fs::write(&loader_conf, "default debian.conf\ntimeout 0\nconsole-mode keep\n")
+        .with_context(|| format!("Failed to write {}", loader_conf.display()))?;
 
     let entry = format!(
         "title   Debian (TruthDB)\n\
@@ -183,13 +165,7 @@ options root=UUID={root_uuid} rw\n"
 
 fn blkid_uuid(dev: &Path) -> Result<String> {
     let output = command("blkid")
-        .args([
-            "-s",
-            "UUID",
-            "-o",
-            "value",
-            &dev.display().to_string(),
-        ])
+        .args(["-s", "UUID", "-o", "value", &dev.display().to_string()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -216,8 +192,8 @@ fn find_installed_kernel_and_initrd(target_root: &Path) -> Result<(PathBuf, Path
     let mut kernels: Vec<PathBuf> = Vec::new();
     let mut initrds: Vec<PathBuf> = Vec::new();
 
-    for entry in std::fs::read_dir(&boot)
-        .with_context(|| format!("Failed to read {}", boot.display()))?
+    for entry in
+        std::fs::read_dir(&boot).with_context(|| format!("Failed to read {}", boot.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -234,12 +210,10 @@ fn find_installed_kernel_and_initrd(target_root: &Path) -> Result<(PathBuf, Path
     kernels.sort();
     initrds.sort();
 
-    let kernel = kernels
-        .pop()
-        .ok_or_else(|| anyhow!("No vmlinuz-* found under {}", boot.display()))?;
-    let initrd = initrds
-        .pop()
-        .ok_or_else(|| anyhow!("No initrd.img-* found under {}", boot.display()))?;
+    let kernel =
+        kernels.pop().ok_or_else(|| anyhow!("No vmlinuz-* found under {}", boot.display()))?;
+    let initrd =
+        initrds.pop().ok_or_else(|| anyhow!("No initrd.img-* found under {}", boot.display()))?;
 
     Ok((kernel, initrd))
 }
