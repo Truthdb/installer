@@ -9,6 +9,8 @@ mod platform;
 mod ui;
 
 use anyhow::{Context, Result};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::process;
 use std::thread;
@@ -20,6 +22,10 @@ use ui::UiBackend;
 
 /// Main entry point
 fn main() {
+    // Best-effort: log a banner to the kernel ring buffer. This remains visible even
+    // if PID1/stdout/stderr are accidentally connected to /dev/null in initramfs.
+    let _ = log_to_kmsg("TruthDB Installer starting");
+
     // Initialize logging to stdout/stderr
     tracing_subscriber::fmt::fmt()
         .with_target(false)
@@ -38,9 +44,16 @@ fn main() {
         Err(e) => {
             error!("Fatal error: {:#}", e);
             eprintln!("\nFATAL ERROR: {:#}", e);
+            let _ = log_to_kmsg(&format!("Fatal error: {e:#}"));
             process::exit(1);
         }
     }
+}
+
+fn log_to_kmsg(message: &str) -> std::io::Result<()> {
+    let mut f = OpenOptions::new().write(true).open("/dev/kmsg")?;
+    // Prefix with a stable tag so it can be grepped in dmesg if needed.
+    writeln!(f, "truthdb-installer: {message}")
 }
 
 /// Main application logic
