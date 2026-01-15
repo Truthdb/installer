@@ -241,54 +241,20 @@ impl FramebufferBackend {
 
     /// Fallback text output to console
     fn fallback_render(&self, lines: &[String]) -> Result<()> {
-        // Prefer writing directly to /dev/console so we work even if stdout/stderr
-        // are miswired in initramfs.
-        let mut out = OpenOptions::new()
-            .write(true)
-            .open("/dev/console")
-            .or_else(|_| OpenOptions::new().write(true).open("/dev/tty0"))
-            .map(Some)
-            .unwrap_or(None);
+        // Clear screen using ANSI escape codes
+        print!("\x1B[2J\x1B[H");
 
-        if let Some(ref mut out) = out {
-            write!(out, "\x1B[2J\x1B[H")?;
-            for line in lines {
-                writeln!(out, "{}", line)?;
-            }
-            out.flush()?;
-        } else {
-            // Last-resort: stdout.
-            print!("\x1B[2J\x1B[H");
-            for line in lines {
-                println!("{}", line);
-            }
-            std::io::stdout().flush()?;
+        for line in lines {
+            println!("{}", line);
         }
-        Ok(())
-    }
 
-    fn looks_like_hyperv() -> bool {
-        // Best-effort detection: Hyper-V typically reports DMI sys_vendor as
-        // "Microsoft Corporation" and product name as "Virtual Machine".
-        // If these files don't exist, just assume not Hyper-V.
-        let sys_vendor =
-            std::fs::read_to_string("/sys/devices/virtual/dmi/id/sys_vendor").unwrap_or_default();
-        let product_name =
-            std::fs::read_to_string("/sys/devices/virtual/dmi/id/product_name").unwrap_or_default();
-        sys_vendor.contains("Microsoft") && product_name.contains("Virtual Machine")
+        std::io::stdout().flush()?;
+        Ok(())
     }
 }
 
 impl UiBackend for FramebufferBackend {
     fn init(&mut self) -> Result<()> {
-        // Hyper-V often boots fine but doesn't reliably show a fbdev UI.
-        // Prefer the console fallback there so the installer is visible.
-        if Self::looks_like_hyperv() {
-            warn!("Hyper-V detected; using console UI fallback");
-            self.fallback_mode = true;
-            return Ok(());
-        }
-
         match self.try_init_fb() {
             Ok(_) => {
                 info!("Framebuffer backend initialized successfully");
@@ -358,7 +324,9 @@ impl UiBackend for FramebufferBackend {
 
     fn cleanup(&mut self) -> Result<()> {
         if self.fallback_mode {
-            let _ = self.fallback_render(&[]);
+            // Reset terminal
+            print!("\x1B[2J\x1B[H");
+            std::io::stdout().flush()?;
         }
 
         info!("Framebuffer backend cleaned up");

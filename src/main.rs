@@ -5,14 +5,14 @@
 
 mod app;
 mod input;
-mod kmsg;
 mod platform;
 mod ui;
 
 use anyhow::{Context, Result};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::process;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info};
@@ -24,13 +24,13 @@ use ui::UiBackend;
 fn main() {
     // Best-effort: log a banner to the kernel ring buffer. This remains visible even
     // if PID1/stdout/stderr are accidentally connected to /dev/null in initramfs.
-    let _ = kmsg::log_to_kmsg("TruthDB Installer starting");
+    let _ = log_to_kmsg("TruthDB Installer starting");
 
     // Ensure panics are observable in early-boot environments.
     std::panic::set_hook(Box::new(|panic_info| {
         let msg = panic_info.to_string();
         eprintln!("\nPANIC: {msg}");
-        let _ = kmsg::log_to_kmsg(&format!("Panic: {msg}"));
+        let _ = log_to_kmsg(&format!("Panic: {msg}"));
     }));
 
     // Initialize logging to stdout/stderr
@@ -51,82 +51,39 @@ fn main() {
         Err(e) => {
             error!("Fatal error: {:#}", e);
             eprintln!("\nFATAL ERROR: {:#}", e);
-            let _ = kmsg::log_to_kmsg(&format!("Fatal error: {e:#}"));
+            let _ = log_to_kmsg(&format!("Fatal error: {e:#}"));
             process::exit(1);
         }
     }
 }
 
+fn log_to_kmsg(message: &str) -> std::io::Result<()> {
+    let mut f = OpenOptions::new().write(true).open("/dev/kmsg")?;
+    // Prefix with a stable tag so it can be grepped in dmesg if needed.
+    writeln!(f, "truthdb-installer: {message}")
+}
+
 /// Main application logic
 fn run() -> Result<()> {
-    // Track which stage we're in and periodically log it to /dev/kmsg so that
-    // a blank Hyper-V console still leaves breadcrumbs in dmesg.
-    let stage: Arc<Mutex<&'static str>> = Arc::new(Mutex::new("starting"));
-    let stage_for_thread = Arc::clone(&stage);
-    thread::spawn(move || {
-        let mut tick: u64 = 0;
-        loop {
-            let current = match stage_for_thread.lock() {
-                Ok(guard) => *guard,
-                Err(_) => "<poisoned>",
-            };
-            let _ = crate::kmsg::log_to_kmsg(&format!("stage={current} tick={tick}"));
-            tick = tick.wrapping_add(1);
-            thread::sleep(Duration::from_secs(2));
-        }
-    });
-
     // Create application state machine
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "app:new";
-    }
     let mut app = App::new();
 
     // Initialize UI backend
     info!("Initializing UI backend...");
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "ui:create_backend";
-    }
     app.log_step("[..] Initializing UI");
     let mut ui = ui::create_backend().context("Failed to create UI backend")?;
 
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "ui:init";
-    }
     ui.init().context("Failed to initialize UI backend")?;
     app.log_step("[OK] UI initialized");
-    let _ = kmsg::log_to_kmsg("UI initialized");
-
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "ui:render_frame(boot)";
-    }
     render_frame(&app, &mut *ui)?;
 
     // Initialize input handler
     info!("Initializing input handler...");
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "input:create_handler";
-    }
     app.log_step("[..] Initializing input");
     let mut input = input::create_handler().context("Failed to create input handler")?;
 
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "input:init";
-    }
     input.init().context("Failed to initialize input handler")?;
     app.log_step("[OK] Input initialized (press Q to quit for now)");
-    let _ = kmsg::log_to_kmsg("Input initialized");
-
-    {
-        let mut s = stage.lock().unwrap();
-        *s = "ui:render_frame(input)";
-    }
     render_frame(&app, &mut *ui)?;
 
     // Transition from BootSplash to Welcome
