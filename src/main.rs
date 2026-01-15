@@ -26,13 +26,6 @@ fn main() {
     // if PID1/stdout/stderr are accidentally connected to /dev/null in initramfs.
     let _ = log_to_kmsg("TruthDB Installer starting");
 
-    // Ensure panics are observable in early-boot environments.
-    std::panic::set_hook(Box::new(|panic_info| {
-        let msg = panic_info.to_string();
-        eprintln!("\nPANIC: {msg}");
-        let _ = log_to_kmsg(&format!("Panic: {msg}"));
-    }));
-
     // Initialize logging to stdout/stderr
     tracing_subscriber::fmt::fmt()
         .with_target(false)
