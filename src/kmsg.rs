@@ -13,7 +13,7 @@ pub fn log_to_serial(message: &str) -> std::io::Result<()> {
 
     let mut last_err: Option<std::io::Error> = None;
     for dev in candidates {
-        match OpenOptions::new().write(true).append(true).open(dev) {
+        match OpenOptions::new().append(true).open(dev) {
             Ok(mut f) => {
                 return writeln!(f, "truthdb-installer: {message}");
             }
