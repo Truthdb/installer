@@ -70,7 +70,11 @@ fn run() -> Result<()> {
                 Ok(guard) => *guard,
                 Err(_) => "<poisoned>",
             };
-            let _ = crate::kmsg::log_to_kmsg(&format!("stage={current} tick={tick}"));
+            // Write the heartbeat to serial so it doesn't flood the VM's visible console.
+            // If serial isn't available, fall back to kmsg.
+            if crate::kmsg::log_to_serial(&format!("stage={current} tick={tick}")).is_err() {
+                let _ = crate::kmsg::log_to_kmsg(&format!("stage={current} tick={tick}"));
+            }
             tick = tick.wrapping_add(1);
             thread::sleep(Duration::from_secs(2));
         }

@@ -285,6 +285,7 @@ impl UiBackend for FramebufferBackend {
         // Prefer the console fallback there so the installer is visible.
         if Self::looks_like_hyperv() {
             warn!("Hyper-V detected; using console UI fallback");
+            let _ = crate::kmsg::log_to_serial("ui: Hyper-V detected; using console fallback");
             self.fallback_mode = true;
             return Ok(());
         }

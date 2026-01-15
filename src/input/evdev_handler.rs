@@ -50,6 +50,7 @@ impl EvdevHandler {
                 })
             {
                 info!("Found keyboard device: {:?}", path);
+                let _ = crate::kmsg::log_to_serial(&format!("input: using {:?}", path));
                 return Ok(device);
             }
         }
@@ -128,6 +129,9 @@ impl InputHandler for EvdevHandler {
             }
             Err(e) => {
                 warn!("Failed to initialize evdev: {}. Using stdin fallback.", e);
+                let _ = crate::kmsg::log_to_serial(&format!(
+                    "input: evdev init failed ({e}); using stdin fallback"
+                ));
                 self.fallback_mode = true;
 
                 // Set stdin to non-blocking mode in fallback
