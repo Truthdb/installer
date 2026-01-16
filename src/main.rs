@@ -198,12 +198,12 @@ fn run() -> Result<()> {
 
     // Idle loop: let the user quit (in initramfs this is useful for debugging logs).
     loop {
-        if let Some(ch) = poll_stdin_char_best_effort() {
-            if ch == 'q' || ch == 'Q' {
-                println!("[OK] Exiting");
-                let _ = std::io::stdout().flush();
-                break;
-            }
+        if let Some(ch) = poll_stdin_char_best_effort()
+            && (ch == 'q' || ch == 'Q')
+        {
+            println!("[OK] Exiting");
+            let _ = std::io::stdout().flush();
+            break;
         }
 
         thread::sleep(Duration::from_millis(50));
@@ -250,7 +250,7 @@ impl StdinNonBlocking {
                 if libc::fcntl(fd, libc::F_SETFL, new_flags) < 0 {
                     return Self { old_flags: old, enabled: false };
                 }
-                return Self { old_flags: old, enabled: true };
+                Self { old_flags: old, enabled: true }
             }
         }
 
