@@ -2,15 +2,14 @@
 //!
 //! Simplified console-only installer:
 //! - Output: stdout only (single channel)
-//! - Input: stdin only (best-effort non-blocking)
+//! - Input: stdin only (blocking prompts)
 
 mod platform;
 
 use anyhow::Result;
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::path::Path;
-use std::thread;
-use std::time::Duration;
+use std::process::Command;
 
 fn main() {
     if let Err(e) = run() {
@@ -24,9 +23,6 @@ fn main() {
 fn run() -> Result<()> {
     println!("TruthDB Installer starting...");
     let _ = std::io::stdout().flush();
-
-    // Best-effort: make stdin non-blocking so we can poll for quit without stalling.
-    let _stdin_mode = StdinNonBlocking::enable_best_effort();
 
     let mut had_error = false;
 
@@ -50,6 +46,11 @@ fn run() -> Result<()> {
         let Some(disk) = target_disk else {
             break 'install;
         };
+
+        prompt_enter(&format!(
+            "[!!] About to PARTITION+FORMAT this disk: {}\n[!!] Press ENTER to continue",
+            disk.dev_path.display()
+        ))?;
 
         let payload_path = Path::new("/payload/debian-minbase-amd64-bookworm.tar.zst");
         println!("[..] Checking Debian rootfs payload");
@@ -190,85 +191,29 @@ fn run() -> Result<()> {
     }
 
     if had_error {
-        println!("[ERR] Installer encountered an error; waiting for quit");
+        println!("[ERR] Installer encountered an error");
     } else {
-        println!("[OK] Installer idle; press Q then Enter to exit");
+        println!("[OK] Installer finished");
     }
     let _ = std::io::stdout().flush();
 
-    // Idle loop: let the user quit (in initramfs this is useful for debugging logs).
-    loop {
-        if let Some(ch) = poll_stdin_char_best_effort()
-            && (ch == 'q' || ch == 'Q')
-        {
-            println!("[OK] Exiting");
-            let _ = std::io::stdout().flush();
-            break;
-        }
-
-        thread::sleep(Duration::from_millis(50));
-    }
+    prompt_enter("[!!] Press ENTER to reboot")?;
+    reboot_best_effort();
 
     Ok(())
 }
 
-fn poll_stdin_char_best_effort() -> Option<char> {
-    let mut buf = [0u8; 16];
+fn prompt_enter(message: &str) -> Result<()> {
+    println!("{message}");
+    let _ = std::io::stdout().flush();
+
+    let mut line = String::new();
     let mut stdin = std::io::stdin().lock();
-    match stdin.read(&mut buf) {
-        Ok(0) => None,
-        Ok(n) => {
-            for &b in &buf[..n] {
-                let c = b as char;
-                if c != '\n' && c != '\r' {
-                    return Some(c);
-                }
-            }
-            None
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
-        Err(_) => None,
-    }
+    let _ = stdin.read_line(&mut line)?;
+    Ok(())
 }
 
-struct StdinNonBlocking {
-    old_flags: i32,
-    enabled: bool,
-}
-
-impl StdinNonBlocking {
-    fn enable_best_effort() -> Self {
-        #[cfg(unix)]
-        {
-            let fd: i32 = 0;
-            unsafe {
-                let old = libc::fcntl(fd, libc::F_GETFL);
-                if old < 0 {
-                    return Self { old_flags: 0, enabled: false };
-                }
-                let new_flags = old | libc::O_NONBLOCK;
-                if libc::fcntl(fd, libc::F_SETFL, new_flags) < 0 {
-                    return Self { old_flags: old, enabled: false };
-                }
-                Self { old_flags: old, enabled: true }
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            Self { old_flags: 0, enabled: false }
-        }
-    }
-}
-
-impl Drop for StdinNonBlocking {
-    fn drop(&mut self) {
-        if !self.enabled {
-            return;
-        }
-        #[cfg(unix)]
-        unsafe {
-            let _ = libc::fcntl(0, libc::F_SETFL, self.old_flags);
-        }
-    }
+fn reboot_best_effort() {
+    let _ = Command::new("/bin/busybox").args(["reboot", "-f"]).status();
+    let _ = Command::new("reboot").arg("-f").status();
 }
