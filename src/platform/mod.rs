@@ -8,12 +8,11 @@ pub mod install;
 pub mod partition;
 
 use anyhow::Result;
-use tracing::info;
 
 /// Reboot the system (placeholder)
 #[allow(dead_code)]
 pub fn reboot() -> Result<()> {
-    info!("Reboot requested (not implemented yet)");
+    // Placeholder.
     // Future: use nix::unistd::reboot or similar
     Ok(())
 }
@@ -21,7 +20,7 @@ pub fn reboot() -> Result<()> {
 /// Power off the system (placeholder)
 #[allow(dead_code)]
 pub fn poweroff() -> Result<()> {
-    info!("Poweroff requested (not implemented yet)");
+    // Placeholder.
     // Future: use nix::unistd::reboot with RB_POWER_OFF or similar
     Ok(())
 }
