@@ -1,92 +1,50 @@
 //! TruthDB Installer
 //!
-//! A minimal installer executable designed to run in initramfs environment.
-//! Displays a simple framebuffer UI and handles keyboard input.
+//! Simplified console-only installer:
+//! - Output: stdout only (single channel)
+//! - Input: stdin only (best-effort non-blocking)
 
-mod app;
-mod input;
 mod platform;
-mod ui;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process;
 use std::thread;
 use std::time::Duration;
-use tracing::{debug, error, info};
 
-use app::App;
-use ui::UiBackend;
-
-/// Main entry point
 fn main() {
-    // Initialize logging to stdout/stderr
-    tracing_subscriber::fmt::fmt()
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_level(true)
-        .init();
-
-    info!("TruthDB Installer starting...");
-
-    // Run the application and handle any errors
-    match run() {
-        Ok(()) => {
-            info!("TruthDB Installer exiting cleanly");
-            process::exit(0);
-        }
-        Err(e) => {
-            error!("Fatal error: {:#}", e);
-            eprintln!("\nFATAL ERROR: {:#}", e);
-            process::exit(1);
-        }
+    if let Err(e) = run() {
+        // Keep output on the same channel.
+        println!("[ERR] Fatal error: {e:#}");
+        let _ = std::io::stdout().flush();
+        std::process::exit(1);
     }
 }
 
-/// Main application logic
 fn run() -> Result<()> {
-    // Create application state machine
-    let mut app = App::new();
+    println!("TruthDB Installer starting...");
+    let _ = std::io::stdout().flush();
 
-    // Initialize UI backend
-    info!("Initializing UI backend...");
-    app.log_step("[..] Initializing UI");
-    let mut ui = ui::create_backend().context("Failed to create UI backend")?;
+    // Best-effort: make stdin non-blocking so we can poll for quit without stalling.
+    let _stdin_mode = StdinNonBlocking::enable_best_effort();
 
-    ui.init().context("Failed to initialize UI backend")?;
-    app.log_step("[OK] UI initialized");
-    render_frame(&app, &mut *ui)?;
+    let mut had_error = false;
 
-    // Initialize input handler
-    info!("Initializing input handler...");
-    app.log_step("[..] Initializing input");
-    let mut input = input::create_handler().context("Failed to create input handler")?;
-
-    input.init().context("Failed to initialize input handler")?;
-    app.log_step("[OK] Input initialized (press Q to quit for now)");
-    render_frame(&app, &mut *ui)?;
-
-    // Transition from BootSplash to Welcome
-    app.initialize().context("Failed to initialize application")?;
-
-    // MVP milestone: enumerate disks and enforce "abort if multiple eligible disks".
-    app.log_step("[..] Enumerating eligible disks");
-    render_frame(&app, &mut *ui)?;
+    println!("[..] Enumerating eligible disks");
+    let _ = std::io::stdout().flush();
     let target_disk = match platform::disks::DiskScanner::new_default().choose_single_target_disk()
     {
         Ok(disk) => {
-            app.log_step(format!(
-                "[OK] Target disk: {} ({} bytes)",
-                disk.dev_path.display(),
-                disk.size_bytes
-            ));
+            println!("[OK] Target disk: {} ({} bytes)", disk.dev_path.display(), disk.size_bytes);
             Some(disk)
         }
         Err(e) => {
-            app.handle_error(format!("Disk selection failed: {e:#}"));
+            println!("[ERR] Disk selection failed: {e:#}");
+            had_error = true;
             None
         }
     };
+    let _ = std::io::stdout().flush();
 
     'install: {
         let Some(disk) = target_disk else {
@@ -94,221 +52,223 @@ fn run() -> Result<()> {
         };
 
         let payload_path = Path::new("/payload/debian-minbase-amd64-bookworm.tar.zst");
-        app.log_step("[..] Checking Debian rootfs payload");
-        render_frame(&app, &mut *ui)?;
+        println!("[..] Checking Debian rootfs payload");
         if !payload_path.exists() {
-            app.handle_error(format!("Missing rootfs payload: {}", payload_path.display()));
-            // Do not perform destructive disk operations without a payload to install.
-            render_frame(&app, &mut *ui)?;
+            println!("[ERR] Missing rootfs payload: {}", payload_path.display());
+            had_error = true;
             break 'install;
         }
-        app.log_step("[OK] Rootfs payload present");
+        println!("[OK] Rootfs payload present");
+        let _ = std::io::stdout().flush();
 
-        app.log_step("[..] Wiping disk signatures (wipefs)");
-        render_frame(&app, &mut *ui)?;
+        println!("[..] Wiping disk signatures (wipefs)");
+        let _ = std::io::stdout().flush();
         if let Err(e) = platform::partition::wipefs_all(&disk.dev_path) {
-            app.handle_error(format!("wipefs failed: {e:#}"));
-        } else {
-            app.log_step("[OK] Signatures wiped");
+            println!("[ERR] wipefs failed: {e:#}");
+            had_error = true;
+            break 'install;
         }
+        println!("[OK] Signatures wiped");
 
-        app.log_step("[..] Partitioning disk (GPT: ESP+root)");
-        render_frame(&app, &mut *ui)?;
+        println!("[..] Partitioning disk (GPT: ESP+root)");
+        let _ = std::io::stdout().flush();
         if let Err(e) = platform::partition::partition_gpt_esp_root(
             &disk.dev_path,
             platform::partition::PartitionPlan::default(),
         ) {
-            app.handle_error(format!("Partitioning failed: {e:#}"));
-        } else {
-            app.log_step("[OK] Disk partitioned");
-            if let Ok((esp, root)) =
-                platform::partition::expected_esp_and_root_partitions(&disk.dev_path)
-            {
-                app.log_step(format!("[OK] ESP partition: {}", esp.display()));
-                app.log_step(format!("[OK] Root partition: {}", root.display()));
-
-                app.log_step("[..] Formatting partitions (vfat+ext4)");
-                render_frame(&app, &mut *ui)?;
-                if let Err(e) = platform::install::format_partitions(&esp, &root) {
-                    app.handle_error(format!("Formatting failed: {e:#}"));
-                    render_frame(&app, &mut *ui)?;
-                    break 'install;
-                } else {
-                    app.log_step("[OK] Partitions formatted");
-
-                    app.log_step("[..] Mounting target filesystem");
-                    render_frame(&app, &mut *ui)?;
-                    let mount_plan = platform::install::MountPlan::default();
-                    if let Err(e) = platform::install::mount_partitions(&esp, &root, &mount_plan) {
-                        app.handle_error(format!("Mount failed: {e:#}"));
-                        render_frame(&app, &mut *ui)?;
-                        break 'install;
-                    } else {
-                        app.log_step(format!(
-                            "[OK] Mounted root at {}",
-                            mount_plan.target_root.display()
-                        ));
-
-                        app.log_step("[..] Extracting Debian rootfs payload");
-                        render_frame(&app, &mut *ui)?;
-                        if let Err(e) = platform::install::extract_rootfs_payload(
-                            payload_path,
-                            &mount_plan.target_root,
-                        ) {
-                            app.handle_error(format!("Extract failed: {e:#}"));
-                            render_frame(&app, &mut *ui)?;
-                            let _ = platform::install::unmount_target(&mount_plan);
-                            break 'install;
-                        } else {
-                            app.log_step("[OK] Rootfs extracted");
-
-                            app.log_step("[..] Setting hostname to truthdb01");
-                            render_frame(&app, &mut *ui)?;
-                            if let Err(e) =
-                                platform::install::configure_hostname(&mount_plan, "truthdb01")
-                            {
-                                app.handle_error(format!("Hostname setup failed: {e:#}"));
-                                render_frame(&app, &mut *ui)?;
-                                let _ = platform::install::unmount_target(&mount_plan);
-                                break 'install;
-                            } else {
-                                app.log_step("[OK] Hostname configured");
-                            }
-
-                            app.log_step(
-                                "[..] Creating initial user (truthdb) + setting passwords",
-                            );
-                            render_frame(&app, &mut *ui)?;
-                            if let Err(e) = platform::install::configure_initial_users(&mount_plan)
-                            {
-                                app.handle_error(format!("User setup failed: {e:#}"));
-                                render_frame(&app, &mut *ui)?;
-                                let _ = platform::install::unmount_target(&mount_plan);
-                                break 'install;
-                            } else {
-                                app.log_step("[OK] User/password configured");
-                            }
-
-                            app.log_step("[..] Enabling DHCP networking (systemd-networkd)");
-                            render_frame(&app, &mut *ui)?;
-                            if let Err(e) =
-                                platform::install::configure_first_boot_dhcp(&mount_plan)
-                            {
-                                app.handle_error(format!("Networking setup failed: {e:#}"));
-                                render_frame(&app, &mut *ui)?;
-                                let _ = platform::install::unmount_target(&mount_plan);
-                                break 'install;
-                            } else {
-                                app.log_step("[OK] Networking configured (DHCP on boot)");
-                            }
-
-                            app.log_step("[..] Installing bootloader (systemd-boot)");
-                            render_frame(&app, &mut *ui)?;
-                            if let Err(e) = platform::install::configure_boot_systemd_boot(
-                                &disk.dev_path,
-                                &esp,
-                                &root,
-                                &mount_plan,
-                            ) {
-                                app.handle_error(format!("Boot config failed: {e:#}"));
-                                render_frame(&app, &mut *ui)?;
-                                let _ = platform::install::unmount_target(&mount_plan);
-                                break 'install;
-                            } else {
-                                app.log_step("[OK] Boot configured");
-
-                                app.log_step("[..] Syncing disks");
-                                render_frame(&app, &mut *ui)?;
-                                if let Err(e) = platform::install::sync_disks() {
-                                    app.handle_error(format!("Sync failed: {e:#}"));
-                                    render_frame(&app, &mut *ui)?;
-                                    let _ = platform::install::unmount_target(&mount_plan);
-                                    break 'install;
-                                } else {
-                                    app.log_step("[OK] Disks synced");
-
-                                    app.log_step("[..] Unmounting target");
-                                    render_frame(&app, &mut *ui)?;
-                                    if let Err(e) = platform::install::unmount_target(&mount_plan) {
-                                        app.handle_error(format!("Unmount failed: {e:#}"));
-                                        render_frame(&app, &mut *ui)?;
-                                        break 'install;
-                                    } else {
-                                        app.log_step("[OK] Unmounted target");
-                                        app.log_step(
-                                            "[OK] Install complete (reboot and remove ISO)",
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            println!("[ERR] Partitioning failed: {e:#}");
+            had_error = true;
+            break 'install;
         }
+        println!("[OK] Disk partitioned");
+
+        let (esp, root) =
+            match platform::partition::expected_esp_and_root_partitions(&disk.dev_path) {
+                Ok(paths) => paths,
+                Err(e) => {
+                    println!("[ERR] Could not compute partition paths: {e:#}");
+                    had_error = true;
+                    break 'install;
+                }
+            };
+        println!("[OK] ESP partition: {}", esp.display());
+        println!("[OK] Root partition: {}", root.display());
+
+        println!("[..] Formatting partitions (vfat+ext4)");
+        let _ = std::io::stdout().flush();
+        if let Err(e) = platform::install::format_partitions(&esp, &root) {
+            println!("[ERR] Formatting failed: {e:#}");
+            had_error = true;
+            break 'install;
+        }
+        println!("[OK] Partitions formatted");
+
+        println!("[..] Mounting target filesystem");
+        let _ = std::io::stdout().flush();
+        let mount_plan = platform::install::MountPlan::default();
+        if let Err(e) = platform::install::mount_partitions(&esp, &root, &mount_plan) {
+            println!("[ERR] Mount failed: {e:#}");
+            had_error = true;
+            break 'install;
+        }
+        println!("[OK] Mounted root at {}", mount_plan.target_root.display());
+
+        println!("[..] Extracting Debian rootfs payload");
+        let _ = std::io::stdout().flush();
+        if let Err(e) =
+            platform::install::extract_rootfs_payload(payload_path, &mount_plan.target_root)
+        {
+            println!("[ERR] Extract failed: {e:#}");
+            had_error = true;
+            let _ = platform::install::unmount_target(&mount_plan);
+            break 'install;
+        }
+        println!("[OK] Rootfs extracted");
+
+        println!("[..] Setting hostname to truthdb01");
+        let _ = std::io::stdout().flush();
+        if let Err(e) = platform::install::configure_hostname(&mount_plan, "truthdb01") {
+            println!("[ERR] Hostname setup failed: {e:#}");
+            had_error = true;
+            let _ = platform::install::unmount_target(&mount_plan);
+            break 'install;
+        }
+        println!("[OK] Hostname configured");
+
+        println!("[..] Creating initial user (truthdb) + setting passwords");
+        let _ = std::io::stdout().flush();
+        if let Err(e) = platform::install::configure_initial_users(&mount_plan) {
+            println!("[ERR] User setup failed: {e:#}");
+            had_error = true;
+            let _ = platform::install::unmount_target(&mount_plan);
+            break 'install;
+        }
+        println!("[OK] User/password configured");
+
+        println!("[..] Enabling DHCP networking (systemd-networkd)");
+        let _ = std::io::stdout().flush();
+        if let Err(e) = platform::install::configure_first_boot_dhcp(&mount_plan) {
+            println!("[ERR] Networking setup failed: {e:#}");
+            had_error = true;
+            let _ = platform::install::unmount_target(&mount_plan);
+            break 'install;
+        }
+        println!("[OK] Networking configured (DHCP on boot)");
+
+        println!("[..] Installing bootloader (systemd-boot)");
+        let _ = std::io::stdout().flush();
+        if let Err(e) =
+            platform::install::configure_boot_systemd_boot(&disk.dev_path, &esp, &root, &mount_plan)
+        {
+            println!("[ERR] Boot config failed: {e:#}");
+            had_error = true;
+            let _ = platform::install::unmount_target(&mount_plan);
+            break 'install;
+        }
+        println!("[OK] Boot configured");
+
+        println!("[..] Syncing disks");
+        let _ = std::io::stdout().flush();
+        if let Err(e) = platform::install::sync_disks() {
+            println!("[ERR] Sync failed: {e:#}");
+            had_error = true;
+            let _ = platform::install::unmount_target(&mount_plan);
+            break 'install;
+        }
+        println!("[OK] Disks synced");
+
+        println!("[..] Unmounting target");
+        let _ = std::io::stdout().flush();
+        if let Err(e) = platform::install::unmount_target(&mount_plan) {
+            println!("[ERR] Unmount failed: {e:#}");
+            had_error = true;
+            break 'install;
+        }
+        println!("[OK] Unmounted target");
+        println!("[OK] Install complete (reboot and remove ISO)");
+        let _ = std::io::stdout().flush();
     }
 
-    // Render initial screen
-    render_frame(&app, &mut *ui)?;
+    if had_error {
+        println!("[ERR] Installer encountered an error; waiting for quit");
+    } else {
+        println!("[OK] Installer idle; press Q then Enter to exit");
+    }
+    let _ = std::io::stdout().flush();
 
-    info!("Entering main loop...");
-
-    // Main event loop
+    // Idle loop: let the user quit (in initramfs this is useful for debugging logs).
     loop {
-        // Poll for input
-        match input.poll() {
-            Ok(Some(ch)) => {
-                debug!("Received input: '{}'", ch);
-                app.handle_input(ch)?;
-
-                if ch == 'q' || ch == 'Q' {
-                    app.log_step("[..] Exit requested");
-                }
-
-                // Re-render after input
-                render_frame(&app, &mut *ui)?;
-            }
-            Ok(None) => {
-                // No input, continue
-            }
-            Err(e) => {
-                error!("Input error: {}", e);
-                app.handle_error(format!("Input error: {}", e));
-                render_frame(&app, &mut *ui)?;
-            }
-        }
-
-        // Check if we should exit
-        if app.should_exit() {
-            info!("Exit requested");
+        if let Some(ch) = poll_stdin_char_best_effort()
+            && (ch == 'q' || ch == 'Q')
+        {
+            println!("[OK] Exiting");
+            let _ = std::io::stdout().flush();
             break;
         }
 
-        // Small delay to avoid busy-waiting
         thread::sleep(Duration::from_millis(50));
     }
-
-    // Cleanup
-    info!("Cleaning up...");
-    input.cleanup().context("Failed to cleanup input handler")?;
-    ui.cleanup().context("Failed to cleanup UI backend")?;
 
     Ok(())
 }
 
-/// Render a frame with current application state
-fn render_frame(app: &App, ui: &mut dyn UiBackend) -> Result<()> {
-    // Clear screen to dark blue
-    ui.clear(0, 0, 64)?;
+fn poll_stdin_char_best_effort() -> Option<char> {
+    let mut buf = [0u8; 16];
+    let mut stdin = std::io::stdin().lock();
+    match stdin.read(&mut buf) {
+        Ok(0) => None,
+        Ok(n) => {
+            for &b in &buf[..n] {
+                let c = b as char;
+                if c != '\n' && c != '\r' {
+                    return Some(c);
+                }
+            }
+            None
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(_) => None,
+    }
+}
 
-    // Get text to display
-    let lines = app.get_display_text();
+struct StdinNonBlocking {
+    old_flags: i32,
+    enabled: bool,
+}
 
-    // Render text
-    ui.render_text(&lines)?;
+impl StdinNonBlocking {
+    fn enable_best_effort() -> Self {
+        #[cfg(unix)]
+        {
+            let fd: i32 = 0;
+            unsafe {
+                let old = libc::fcntl(fd, libc::F_GETFL);
+                if old < 0 {
+                    return Self { old_flags: 0, enabled: false };
+                }
+                let new_flags = old | libc::O_NONBLOCK;
+                if libc::fcntl(fd, libc::F_SETFL, new_flags) < 0 {
+                    return Self { old_flags: old, enabled: false };
+                }
+                Self { old_flags: old, enabled: true }
+            }
+        }
 
-    // Present the frame
-    ui.present()?;
+        #[cfg(not(unix))]
+        {
+            Self { old_flags: 0, enabled: false }
+        }
+    }
+}
 
-    Ok(())
+impl Drop for StdinNonBlocking {
+    fn drop(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::fcntl(0, libc::F_SETFL, self.old_flags);
+        }
+    }
 }
