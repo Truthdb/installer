@@ -8,23 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial implementation of TruthDB installer
-- State machine with BootSplash, Welcome, Error, and Exit states
-- Framebuffer UI backend with console fallback
-- Evdev keyboard input handler with stdin fallback
-- 8x8 bitmap font for text rendering
-- Structured logging to stdout/stderr
+- Initial implementation of TruthDB installer (console-only)
+- Safe-ish disk selection: refuses to pick if multiple eligible disks exist
+- GPT partitioning (ESP + root), formatting, mounting, payload extraction
+- Debian post-install configuration: hostname, users/passwords, DHCP via systemd-networkd
+- systemd-boot installation on ESP + loader entry + best-effort `efibootmgr`
 - Static musl build for initramfs compatibility
 - CI workflows for lint, test, and build
-- Release workflow with automated changelog
+- Release workflow packaging musl tarball + sha256
 
-### Features
-- Minimal UI showing installer status
-- Keyboard input handling (Q to quit)
-- Clean exit codes (0 for success, non-zero for errors)
-- Modular architecture for future expansion
+### Changed
+- Documentation now reflects the current console-only implementation (older UI/state-machine docs were stale).
 
 ### Documentation
-- Comprehensive README with usage instructions
-- Architecture documentation
-- Build instructions for musl target
+- Updated README to match current code paths and ISO workflow expectations

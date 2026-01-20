@@ -1,166 +1,73 @@
 # TruthDB Installer
 
-The installer used by the ISO boot installation for TruthDB.
+The installer executable that runs inside the TruthDB installer ISO's initramfs.
 
-## Overview
+This repo builds a small, statically-linked Rust binary (`truthdb-installer`) intended to be launched by BusyBox `init` on the ISO. The ISO build (see the `installer-iso` repo) provides the surrounding initramfs, embedded Debian payload, and required system tools.
 
-The TruthDB installer is a minimal, statically-linked executable designed to run in an initramfs environment. It provides a simple framebuffer-based UI and handles the installation workflow for TruthDB systems.
+## What It Does (Current Implementation)
 
-## Features
+The current installer is **console-only** and interacts via blocking stdin prompts.
 
-- **Minimal footprint**: Static musl binary (~600KB)
-- **No dependencies**: Runs without systemd, dbus, X11, or Wayland
-- **Framebuffer UI**: DRM/KMS or Linux framebuffer (/dev/fb0) support
-- **Console fallback**: Works even without graphics
-- **Keyboard input**: Via evdev or stdin
-- **State machine**: Clean state transitions for installation workflow
-- **Structured logging**: All output to stdout/stderr for console/serial capture
+High-level flow:
+
+1. Enumerate eligible install disks (refuses to choose if more than one candidate is present).
+2. Prompt for confirmation.
+3. Wipe existing disk signatures (`wipefs -a`).
+4. Partition GPT: ESP (512 MiB) + root (remainder) (`sfdisk` preferred, `parted` fallback).
+5. Format: ESP as FAT32 (`mkfs.vfat`), root as ext4 (`mkfs.ext4`).
+6. Mount root at `/mnt` and ESP at `/mnt/boot/efi`.
+7. Extract offline Debian payload from `/payload/debian-minbase-amd64-bookworm.tar.zst` using `tar --zstd`.
+8. Configure hostname (`truthdb01`).
+9. Create initial user and set passwords (currently hardcoded).
+10. Configure DHCP for first boot using `systemd-networkd`.
+11. Install `systemd-boot` into the ESP, copy the installed Debian kernel/initrd into the ESP, write a loader entry, and best-effort create an NVRAM entry via `efibootmgr`.
+12. Sync, unmount, and reboot.
+
+## Safety / Assumptions
+
+- Destructive by design: it will repartition and format the selected disk.
+- Disk selection is deliberately strict:
+    - Filters out common non-target devices (loop/ram/sr/fd/dm-/md).
+    - Requires a backing `/sys/block/<dev>/device`.
+    - Requires non-removable and non-readonly.
+    - Requires size >= 8 GiB.
+    - Refuses to run if the disk (or its partitions) appear mounted.
+    - Refuses to auto-pick if more than one eligible disk exists.
+
+## Runtime Requirements (Initramfs)
+
+Because the installer executes external tools directly (no shell), the initramfs must include these programs (and shared libraries if dynamically linked):
+
+- `wipefs`, `sfdisk` or `parted`, `partprobe`, `blkid`
+- `mkfs.vfat`, `mkfs.ext4`, `mount`, `umount`
+- `tar` (with zstd support) + `zstd`
+- `chroot`
+- `efibootmgr` (best-effort; installer remains bootable via ESP fallback path)
+- `systemd-boot` EFI binary at `/usr/lib/systemd/boot/efi/systemd-bootx64.efi`
+
+The `installer-iso` release workflow is responsible for assembling a correct initramfs with these tools.
+
+## Credentials (MVP)
+
+The initial username/password are currently hardcoded in code (`truthdb` / `123456`) and should be treated as an MVP default. Plan on changing these immediately after first boot.
 
 ## Building
 
-### Prerequisites
-
-- Rust toolchain (stable)
-- musl target support
-
-### Build Commands
-
 ```bash
-# Add musl target
 rustup target add x86_64-unknown-linux-musl
-
-# Build release binary
 cargo build --release --target x86_64-unknown-linux-musl
-
-# Binary location
-ls -lh target/x86_64-unknown-linux-musl/release/truthdb-installer
 ```
 
-### Build for Development
+Output binary:
 
-```bash
-# Run tests
-cargo test --target x86_64-unknown-linux-musl
-
-# Run clippy
-cargo clippy --all-targets --all-features
-
-# Check formatting
-cargo fmt -- --check
-```
-
-## Usage
-
-The installer is designed to run as PID 2 in an initramfs environment, started by BusyBox init (PID 1).
-
-### Runtime Requirements
-
-- Linux kernel with framebuffer or DRM/KMS support (optional, has console fallback)
-- `/dev/input/event*` devices for keyboard input (optional, has stdin fallback)
-- `/proc`, `/sys`, `/dev` mounted by init system
-
-### Running
-
-```bash
-# In initramfs, BusyBox init will start it automatically
-# For manual testing (requires appropriate permissions):
-./truthdb-installer
-```
-
-### Exit Codes
-
-- `0`: Clean exit (user chose to quit/reboot)
-- `non-zero`: Fatal error occurred
-
-### Controls (MVP)
-
-- **Q**: Quit the installer
-
-## Architecture
-
-### Module Structure
-
-```
-src/
-├── main.rs              # Entry point and main loop
-├── app.rs               # State machine and application logic
-├── ui/
-│   ├── mod.rs          # UI trait definitions
-│   ├── fb.rs           # Framebuffer backend
-│   └── font_8x8.rs     # Bitmap font data
-├── input/
-│   ├── mod.rs          # Input trait definitions
-│   └── evdev_handler.rs # Keyboard input via evdev
-└── platform/
-    └── mod.rs          # Platform operations (reboot, poweroff)
-```
-
-### State Machine
-
-The installer implements an explicit state machine:
-
-1. **BootSplash**: Initial state on startup
-2. **Welcome**: Main screen with instructions (current MVP)
-3. **Error**: Error state with message
-4. **Exit**: Clean shutdown state
-
-Future states will be added for the installation workflow.
-
-### UI Backends
-
-The installer supports multiple UI backends with automatic fallback:
-
-1. **Framebuffer** (`/dev/fb0`): Direct framebuffer rendering
-2. **Console**: ANSI escape codes fallback
-
-Future: DRM/KMS backend for better hardware support.
-
-### Input Handling
-
-The installer supports multiple input methods:
-
-1. **evdev**: Direct keyboard input from `/dev/input/event*`
-2. **stdin**: Fallback to standard input
-
-## Development
-
-### Testing
-
-```bash
-# Run all tests
-cargo test --target x86_64-unknown-linux-musl
-
-# Run specific test
-cargo test --target x86_64-unknown-linux-musl test_name
-```
-
-### Testing in Docker (recommended)
-If you don't have a Linux + musl toolchain locally, you can run the same tests CI runs using Docker:
-
-```bash
-./scripts/test_docker.sh
-```
-
-This runs:
-- `cargo test --target x86_64-unknown-linux-gnu`
-- `cargo test --target x86_64-unknown-linux-musl` (after installing `musl-tools` and `rust-std`)
-
-### Code Structure Guidelines
-
-- Keep modules focused and testable
-- Use the state machine for all workflow logic
-- Log important events for debugging
-- Handle errors gracefully with fallbacks
-- Prefer static linking for initramfs compatibility
+`target/x86_64-unknown-linux-musl/release/truthdb-installer`
 
 ## CI/CD
 
-The project includes GitHub Actions workflows for:
-
-- **CI**: Lint, test, and build on every push/PR
-- **Release**: Automated releases with changelog generation
+- CI runs formatting, clippy, tests, and a musl release build.
+- Release (tag `v*`) publishes the musl tarball + sha256 used by `installer-iso`.
 
 ## License
 
-Apache-2.0
+MIT. See LICENSE.
 
