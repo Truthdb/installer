@@ -42,11 +42,10 @@ impl DiskScanner {
             let entry = entry?;
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy().to_string();
-            if !is_candidate_name(&name) {
+            let disk_sys = entry.path();
+            if !is_candidate_block_device(&disk_sys, &name) {
                 continue;
             }
-
-            let disk_sys = entry.path();
 
             // If there is no backing device directory, it is unlikely to be a real disk.
             if !disk_sys.join("device").exists() {
@@ -99,20 +98,31 @@ impl DiskScanner {
     }
 }
 
-fn is_candidate_name(name: &str) -> bool {
-    // Exclude virtual and non-install targets.
-    if name.starts_with("loop")
+fn is_candidate_block_device(disk_sys: &Path, name: &str) -> bool {
+    if is_excluded_device_class(name) {
+        return false;
+    }
+
+    // /sys/block typically contains whole disks already, but keep the explicit
+    // partition guard so odd sysfs layouts do not slip through.
+    !disk_sys.join("partition").exists()
+        && disk_sys.join("dev").exists()
+        && disk_sys.join("size").exists()
+}
+
+fn is_excluded_device_class(name: &str) -> bool {
+    // Exclude common non-install targets. Everything else is vetted by sysfs
+    // properties so broader block-device names such as xvda or mmcblk0 can work.
+    name.starts_with("loop")
         || name.starts_with("ram")
+        || name.starts_with("zram")
         || name.starts_with("sr")
         || name.starts_with("fd")
         || name.starts_with("dm-")
         || name.starts_with("md")
-    {
-        return false;
-    }
-
-    // Common install targets: sdX, vdX, nvmeXnY
-    name.starts_with("sd") || name.starts_with("vd") || name.starts_with("nvme")
+        || name.starts_with("drbd")
+        || name.starts_with("nbd")
+        || name.starts_with("rbd")
 }
 
 fn read_u64(path: impl AsRef<Path>) -> Result<u64> {
@@ -185,13 +195,14 @@ mod tests {
         let sys = temp.path().join("sys");
         let proc = temp.path().join("proc");
 
-        // /sys/block/vda
-        let vda = sys.join("block").join("vda");
-        write(&vda.join("removable"), "0\n");
-        write(&vda.join("ro"), "0\n");
-        write(&vda.join("size"), "4096\n"); // 4096 * 512 = 2MiB
-        fs::create_dir_all(vda.join("device")).unwrap();
-        write(&vda.join("device").join("model"), "UTM Disk\n");
+        // /sys/block/xvda
+        let xvda = sys.join("block").join("xvda");
+        write(&xvda.join("removable"), "0\n");
+        write(&xvda.join("ro"), "0\n");
+        write(&xvda.join("size"), "4096\n"); // 4096 * 512 = 2MiB
+        write(&xvda.join("dev"), "202:0\n");
+        fs::create_dir_all(xvda.join("device")).unwrap();
+        write(&xvda.join("device").join("model"), "Xen Disk\n");
 
         // No mounts
         write(&proc.join("self").join("mountinfo"), "");
@@ -199,9 +210,9 @@ mod tests {
         let scanner = make_scanner(&sys, &proc);
         let disks = scanner.eligible_disks().unwrap();
         assert_eq!(disks.len(), 1);
-        assert_eq!(disks[0].name, "vda");
-        assert_eq!(disks[0].dev_path, PathBuf::from("/dev/vda"));
-        assert_eq!(disks[0].model.as_deref(), Some("UTM Disk"));
+        assert_eq!(disks[0].name, "xvda");
+        assert_eq!(disks[0].dev_path, PathBuf::from("/dev/xvda"));
+        assert_eq!(disks[0].model.as_deref(), Some("Xen Disk"));
     }
 
     #[test]
@@ -215,6 +226,7 @@ mod tests {
             write(&d.join("removable"), "0\n");
             write(&d.join("ro"), "0\n");
             write(&d.join("size"), "4096\n");
+            write(&d.join("dev"), "202:0\n");
             fs::create_dir_all(d.join("device")).unwrap();
         }
         write(&proc.join("self").join("mountinfo"), "");
@@ -237,7 +249,29 @@ mod tests {
         write(&vda.join("removable"), "1\n");
         write(&vda.join("ro"), "0\n");
         write(&vda.join("size"), "4096\n");
+        write(&vda.join("dev"), "202:0\n");
         fs::create_dir_all(vda.join("device")).unwrap();
+
+        write(&proc.join("self").join("mountinfo"), "");
+
+        let scanner = make_scanner(&sys, &proc);
+        let disks = scanner.eligible_disks().unwrap();
+        assert_eq!(disks.len(), 0);
+    }
+
+    #[test]
+    fn partition_entries_are_excluded() {
+        let temp = tempfile::tempdir().unwrap();
+        let sys = temp.path().join("sys");
+        let proc = temp.path().join("proc");
+
+        let part = sys.join("block").join("xvda1");
+        write(&part.join("removable"), "0\n");
+        write(&part.join("ro"), "0\n");
+        write(&part.join("size"), "4096\n");
+        write(&part.join("dev"), "202:1\n");
+        write(&part.join("partition"), "1\n");
+        fs::create_dir_all(part.join("device")).unwrap();
 
         write(&proc.join("self").join("mountinfo"), "");
 

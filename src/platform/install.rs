@@ -457,19 +457,37 @@ fn ensure_systemd_pid1(plan: &MountPlan) -> Result<()> {
         })?;
 
     let init_path = plan.target_root.join("sbin/init");
-    if init_path.exists() {
-        // If it's already a symlink to systemd, keep it.
-        if let Ok(link) = std::fs::read_link(&init_path) {
-            // Normalize both absolute and relative symlinks.
-            let link_str = link.to_string_lossy();
-            if link_str.contains("systemd") {
-                return Ok(());
+    match std::fs::symlink_metadata(&init_path) {
+        Ok(meta) => {
+            // Keep an existing symlink to systemd even if it is absolute and therefore
+            // appears "missing" from the installer namespace.
+            if meta.file_type().is_symlink()
+                && let Ok(link) = std::fs::read_link(&init_path)
+            {
+                let link_str = link.to_string_lossy();
+                if link_str.contains("systemd") {
+                    return Ok(());
+                }
+            }
+
+            if meta.is_dir() {
+                std::fs::remove_dir_all(&init_path).with_context(|| {
+                    format!("Failed to remove directory at {}", init_path.display())
+                })?;
+            } else {
+                std::fs::remove_file(&init_path)
+                    .with_context(|| format!("Failed to remove {}", init_path.display()))?;
             }
         }
-        let _ = std::fs::remove_file(&init_path);
-    } else if let Some(parent) = init_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = init_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create {}", parent.display()))?;
+            }
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("Failed to stat {}", init_path.display()));
+        }
     }
 
     let link_target = path_in_target_root(&plan.target_root, &systemd_bin)?;
@@ -777,11 +795,46 @@ fn command(program: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn make_plan(root: &Path) -> MountPlan {
+        MountPlan { target_root: root.to_path_buf(), target_efi: root.join("boot/efi") }
+    }
 
     #[test]
     fn default_mount_points() {
         let plan = MountPlan::default();
         assert_eq!(plan.target_root, PathBuf::from("/mnt"));
         assert_eq!(plan.target_efi, PathBuf::from("/mnt/boot/efi"));
+    }
+
+    #[test]
+    fn ensure_systemd_pid1_keeps_existing_absolute_systemd_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("lib/systemd")).unwrap();
+        fs::create_dir_all(root.join("sbin")).unwrap();
+        fs::write(root.join("lib/systemd/systemd"), "").unwrap();
+        unix_fs::symlink("/lib/systemd/systemd", root.join("sbin/init")).unwrap();
+
+        ensure_systemd_pid1(&make_plan(root)).unwrap();
+
+        let link = fs::read_link(root.join("sbin/init")).unwrap();
+        assert_eq!(link, PathBuf::from("/lib/systemd/systemd"));
+    }
+
+    #[test]
+    fn ensure_systemd_pid1_replaces_non_systemd_init_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("lib/systemd")).unwrap();
+        fs::create_dir_all(root.join("sbin")).unwrap();
+        fs::write(root.join("lib/systemd/systemd"), "").unwrap();
+        unix_fs::symlink("/bin/busybox", root.join("sbin/init")).unwrap();
+
+        ensure_systemd_pid1(&make_plan(root)).unwrap();
+
+        let link = fs::read_link(root.join("sbin/init")).unwrap();
+        assert_eq!(link, PathBuf::from("/lib/systemd/systemd"));
     }
 }
