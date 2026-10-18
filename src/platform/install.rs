@@ -80,9 +80,8 @@ pub fn extract_rootfs_payload(payload: &Path, target_root: &Path) -> Result<()> 
     })
 }
 
-pub fn configure_initial_users(plan: &MountPlan) -> Result<()> {
-    let username = "truthdb";
-    let password = "123456";
+pub fn configure_initial_users(plan: &MountPlan, admin_password: &str) -> Result<()> {
+    let username = "admin";
 
     // Ensure sudo is present in the payload; otherwise the user won't actually be able to elevate.
     let sudo_path = plan.target_root.join("usr/bin/sudo");
@@ -98,6 +97,7 @@ pub fn configure_initial_users(plan: &MountPlan) -> Result<()> {
         plan.target_root.join("usr/sbin/groupadd"),
         plan.target_root.join("usr/sbin/useradd"),
         plan.target_root.join("usr/sbin/chpasswd"),
+        plan.target_root.join("usr/bin/passwd"),
     ] {
         if !required.exists() {
             return Err(anyhow!("Missing in target rootfs: {}", required.display()));
@@ -116,13 +116,14 @@ pub fn configure_initial_users(plan: &MountPlan) -> Result<()> {
             "/usr/sbin/useradd",
             &["-m", "-s", "/bin/bash", "-G", "sudo", username],
         )
-        .context("Failed to create truthdb user")?;
+        .context("Failed to create admin user")?;
     }
 
-    // Set user and root passwords.
-    chroot_chpasswd(&plan.target_root, username, password)
-        .context("Failed to set truthdb password")?;
-    chroot_chpasswd(&plan.target_root, "root", password).context("Failed to set root password")?;
+    chroot_chpasswd(&plan.target_root, username, admin_password)
+        .context("Failed to set admin password")?;
+    // Root has no usable password; administration goes through sudo.
+    chroot_run(&plan.target_root, "/usr/bin/passwd", &["-l", "root"])
+        .context("Failed to lock root password")?;
 
     Ok(())
 }
