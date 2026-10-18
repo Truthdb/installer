@@ -11,14 +11,14 @@ The current installer is **console-only** and interacts via blocking stdin promp
 High-level flow:
 
 1. Enumerate eligible install disks (refuses to choose if more than one candidate is present).
-2. Prompt for confirmation.
+2. Ask for the `admin` account's password (twice, not echoed), then prompt for confirmation.
 3. Wipe existing disk signatures (`wipefs -a`).
 4. Partition GPT: ESP (512 MiB) + root (remainder) (`sfdisk` preferred, `parted` fallback).
 5. Format: ESP as FAT32 (`mkfs.vfat`), root as ext4 (`mkfs.ext4`).
 6. Mount root at `/mnt` and ESP at `/mnt/boot/efi`.
 7. Extract offline Debian payload from `/payload/debian-minbase-amd64-bookworm.tar.zst` using `tar --zstd`.
 8. Configure hostname (`truthdb01`).
-9. Create initial user and set passwords (currently hardcoded).
+9. Create the `admin` login user (member of `sudo`) with that password, and lock the root password. The TruthDB service runs as the `truthdb` system user, which the payload already contains.
 10. Configure DHCP for first boot using `systemd-networkd`.
 11. Install `systemd-boot` into the ESP, copy the installed Debian kernel/initrd into the ESP, write a loader entry, and best-effort create an NVRAM entry via `efibootmgr`.
 12. Sync, unmount, and reboot.
@@ -47,9 +47,9 @@ Because the installer executes external tools directly (no shell), the initramfs
 
 The `installer-iso` release workflow is responsible for assembling a correct initramfs with these tools.
 
-## Credentials (MVP)
+## Credentials
 
-The initial username/password are currently hardcoded in code (`truthdb` / `123456`) and should be treated as an MVP default. Plan on changing these immediately after first boot.
+The installer asks for a password for the `admin` account before it touches the disk. Log in as `admin` and use `sudo` for administration; root's password is locked.
 
 ## Building
 

@@ -6,7 +6,7 @@
 
 mod platform;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::Command;
@@ -46,6 +46,9 @@ fn run() -> Result<()> {
         let Some(disk) = target_disk else {
             break 'install;
         };
+
+        // Collect every answer before the disk is touched.
+        let admin_password = prompt_admin_password()?;
 
         prompt_enter(&format!(
             "[!!] About to PARTITION+FORMAT this disk: {}\n[!!] Press ENTER to continue",
@@ -136,15 +139,15 @@ fn run() -> Result<()> {
         }
         println!("[OK] Hostname configured");
 
-        println!("[..] Creating initial user (truthdb) + setting passwords");
+        println!("[..] Creating admin user + locking root");
         let _ = std::io::stdout().flush();
-        if let Err(e) = platform::install::configure_initial_users(&mount_plan) {
+        if let Err(e) = platform::install::configure_initial_users(&mount_plan, &admin_password) {
             println!("[ERR] User setup failed: {e:#}");
             had_error = true;
             let _ = platform::install::unmount_target(&mount_plan);
             break 'install;
         }
-        println!("[OK] User/password configured");
+        println!("[OK] Admin user created, root locked");
 
         println!("[..] Enabling DHCP networking (systemd-networkd)");
         let _ = std::io::stdout().flush();
@@ -203,6 +206,58 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+/// Asks for the admin account's password, twice and without echo, until both entries
+/// match.
+fn prompt_admin_password() -> Result<String> {
+    loop {
+        let first = prompt_hidden("[??] Password for the admin account: ")?;
+        let second = prompt_hidden("[??] Repeat the password: ")?;
+        match validate_new_password(&first, &second) {
+            Ok(password) => return Ok(password),
+            Err(e) => println!("[ERR] {e}"),
+        }
+    }
+}
+
+fn validate_new_password(first: &str, second: &str) -> Result<String> {
+    if first.is_empty() {
+        bail!("The password must not be empty");
+    }
+    if first != second {
+        bail!("The passwords do not match");
+    }
+    Ok(first.to_string())
+}
+
+/// Reads one line from stdin with terminal echo turned off.
+fn prompt_hidden(message: &str) -> Result<String> {
+    print!("{message}");
+    let _ = std::io::stdout().flush();
+
+    set_echo(false)?;
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+    let restored = set_echo(true);
+    println!();
+
+    if read? == 0 {
+        bail!("stdin closed while reading the password");
+    }
+    restored?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+fn set_echo(on: bool) -> Result<()> {
+    let status = Command::new("/bin/busybox")
+        .args(["stty", if on { "echo" } else { "-echo" }])
+        .status()
+        .context("Failed to run stty")?;
+    if !status.success() {
+        bail!("stty failed: {status}");
+    }
+    Ok(())
+}
+
 fn prompt_enter(message: &str) -> Result<()> {
     println!("{message}");
     let _ = std::io::stdout().flush();
@@ -216,4 +271,24 @@ fn prompt_enter(message: &str) -> Result<()> {
 fn reboot_best_effort() {
     let _ = Command::new("/bin/busybox").args(["reboot", "-f"]).status();
     let _ = Command::new("reboot").arg("-f").status();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_must_not_be_empty() {
+        assert!(validate_new_password("", "").is_err());
+    }
+
+    #[test]
+    fn passwords_must_match() {
+        assert!(validate_new_password("secret", "secreT").is_err());
+    }
+
+    #[test]
+    fn matching_password_is_accepted() {
+        assert_eq!(validate_new_password("s3 cr:et", "s3 cr:et").unwrap(), "s3 cr:et");
+    }
 }
