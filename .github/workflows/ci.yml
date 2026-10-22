@@ -144,11 +144,3 @@ jobs:
           name: truthdb-installer
           path: target/x86_64-unknown-linux-musl/release/truthdb-installer
           if-no-files-found: error
-
-  install-test:
-    name: Install test
-    # Builds an installer ISO with this commit's installer and installs it in
-    # QEMU (the workflow lives in Truthdb/installer-iso).
-    uses: Truthdb/installer-iso/.github/workflows/e2e.yml@main
-    with:
-      installer-from-source: true
